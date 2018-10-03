@@ -1,0 +1,643 @@
+######################################################################################
+## NeuralNetwork_5.py
+## Adriana Perez Rotondo
+## July 2018
+##
+## Tensorflow implementation of student teacher for feed forward neural network
+## Student teacher class can train multiple students of different sizes at the same time
+## Noise added to gradient
+##
+## Returns: creates a graph in the "GRAPH_OUTPUT_PATH" with loss and learning rate plotted
+##          per epoch
+######################################################################################
+
+
+import tensorflow as tf
+import numpy as np
+import matplotlib.pyplot as plt
+import datetime
+#import utils
+
+IS_CLASSIFICATION = False
+NUM_INPUT = 10
+NUM_OUTPUT = 8
+NUM_LAYERS = 3
+MAX_UNITS = 100
+MIN_UNITS = 20
+STUDENT_SCALING = [1,5,10]
+LEARNING_RATE = 0.01
+GAMMA_1 = 1
+GAMMA_2 = 0
+DELTA_T=2
+NUM_EPOCH = 1000
+NUM_EXAMPLES = 1000
+BIN_SIZE = 1
+GRAPH_OUTPUT_PATH = "./OutputGraphs/"
+
+class NeuralNetwork():
+    ''' Any form of neural network'''
+
+    def __init__(self, numUnits, activationFunctions = None,\
+     learningRate = LEARNING_RATE, isClassification = IS_CLASSIFICATION):
+        """
+        :param numUnits: (tpl/list) Dimensions of the neural network.\
+        Number of units for each layer (input, hidden layers, output)
+        :param activationFunctions: (tpl/list) Activation functions.\
+        Array has size 1, if want to set all activation functions to that.\
+        Otherwise size len(numUnits)-1
+        :param learningRate: (float) learning rate for the optimizer
+        :param isClassification: (boolean) classification problem or not
+        """
+        # float number of hidden layers + output layer (don't count input layer)
+        self.numLayers = len(numUnits)
+        # array with the number of units in each layer (input + hidden + output)
+        self.numUnits = numUnits
+        # size is total number of synapses
+        self.size = sum([numUnits[i-1]*numUnits[i] for i in range(1,len(numUnits))])
+        # dictionary with the activation functions for each layer
+        if activationFunctions and len(activationFunctions)==1:
+            # if only one activation is given, set that as the activation
+            # for all layers
+            self.activationFunctions = [activationFunctions[0]\
+             for i in range(self.numLayers)]
+        else:
+            self.activationFunctions = activationFunctions
+        # weights and biases
+        self.layersParameters = {}
+        self.layersCompute = {}
+
+        # training parameters
+        self.loss = None
+        self.optimizer = None
+        self.accuracy = None
+        self.lr = learningRate
+        self.gstep = tf.Variable(0, dtype=tf.int32, trainable=False,\
+         name='global_step')
+        self.isClassification = isClassification
+
+class FeedForwardNN(NeuralNetwork):
+    ''' Feedforward neural network fully connected'''
+    # class varibale keeps track of number of netowrks created for naming purposes
+    counter = 0
+
+    # python calls automatically the constructor of the base cass NeuralNetwork
+    def __init__(self, numUnits, activationFunctions = None,\
+     learningRate = LEARNING_RATE):
+        # NN index (for tf varibales naming)
+        self.index = FeedForwardNN.counter
+        self.scope = 'NN'+str(self.index)
+        FeedForwardNN.counter +=1
+        with tf.variable_scope(self.scope) as scope:
+            NeuralNetwork.__init__(self, numUnits, activationFunctions, learningRate)
+            # tf Graph input and output
+            self.trainX = tf.placeholder(dtype=tf.float32, \
+            shape = [None, self.numUnits[0]], name = 'trainX')
+            self.trainY = tf.placeholder(tf.float32, \
+            [None, self.numUnits[self.numLayers-1]], name = 'trainY')
+
+
+
+    def buildLayers(self, weights = None):
+        '''
+        creates the layers of the neural network as tf operations with weights and biases
+
+        '''
+        # scope makes the tensorboard tidier by goruping variables
+        scope = self.scope
+        with tf.variable_scope(scope) as scope:
+            if  not weights:
+                # for each layer except input
+                for i in range(1, len(self.numUnits)):
+                    # initialize weights and biases as tf variables with initializer
+                    newLayer = {
+                        # weights are initialized as normal variables
+                        'weights': tf.get_variable(name='weights_'+str(self.index)+'_'+str(i), shape=(self.numUnits[i-1], self.numUnits[i]),
+                                initializer=tf.random_normal_initializer(stddev=np.sqrt(self.numUnits[i-1]*self.numUnits[i]))),
+                        'biases': tf.get_variable(name='bias_'+str(self.index)+'_'+str(i), shape=(self.numUnits[i]),
+                                initializer=tf.random_normal_initializer(stddev=np.sqrt(self.numUnits[i])))}
+                    self.layersParameters[i] = newLayer
+            else:
+                self.layersParameters = weights
+            for i in range(1, len(self.numUnits)):
+                # define layer
+                if i==1:
+                    # first layer has trainX as input
+                    l = tf.add(tf.matmul(self.trainX, self.layersParameters[i]['weights']), self.layersParameters[i]['biases'])
+                else:
+                    # the rest of layers has previous layer output as input
+                    l = tf.add(tf.matmul(self.layersCompute[i-1], self.layersParameters[i]['weights']), self.layersParameters[i]['biases'])
+
+                # add activation function
+                if False:
+                #if i == len(self.numUnits)-1 and not self.isClassification:
+                    # apply activation function except output layer in linear regression
+                    # because ouptput is unbounded
+                    #l = tf.nn.relu(l)
+                    pass
+                else:
+                    if not self.activationFunctions:
+                        # default activation function is sigmoid
+                        l = tf.sigmoid(l)
+                    elif self.activationFunctions[i] == "relu":
+                        l = tf.nn.relu(l)
+                    elif self.activationFunctions[i] == "sigmoid":
+                        l = tf.sigmoid(l)
+                    elif self.activationFunctions[i] == "tanh":
+                        l = tf.tanh(l)
+                    else:
+                        l = tf.sigmoid(l)
+
+                # add layer to the dictionary of layers
+                self.layersCompute[i] = l
+        # last layer is the output of the NN
+        self.output = self.layersCompute[len(self.numUnits)-1]
+        #print('Layer parameters of nn {0} are {1}'.format(self.index,self.layersParameters))
+        #print('Layers of nn {0} are {1}'.format(self.index,self.layersCompute))
+
+    def calcLoss(self):
+        '''
+        define loss function
+        for classifaction problem:
+            use softmax cross entropy with logits as the loss function
+            compute mean cross entropy, softmax is applied internally
+        for regression problem:
+            use mean square error
+        '''
+        with tf.name_scope('loss'+str(self.index)):
+            if self.isClassification:
+                entropy = tf.nn.softmax_cross_entropy_with_logits(labels=self.trainY, logits=self.output)
+                self.loss = tf.reduce_mean(entropy, name='loss')
+            else:
+                #print(self.trainY)
+                #self.loss = tf.reduce_sum((self.output-self.trainY)**2)
+                self.loss = tf.reduce_sum(tf.squared_difference(self.output, self.trainY))
+                #self.loss = tf.reduce_mean(tf.reduce_sum(tf.squared_difference(self.output, self.trainY),0),0)
+                #self.loss = (1/self.numUnits[-1])*tf.reduce_sum(tf.reduce_sum((self.output-self.trainY)**2,1))
+
+    def optimize(self):
+        '''
+        Define training operation
+        using Adam Gradient Descent to minimize cost
+        or gradient descent
+        '''
+        #self.optimizer = tf.train.AdamOptimizer(self.lr).minimize(self.loss,global_step=self.gstep)
+        self.optimizer = tf.train.GradientDescentOptimizer(self.lr).minimize(self.loss,global_step=self.gstep)
+
+    def eval(self):
+        '''
+        Count the number of right predictions in a batch for classification problem
+        '''
+        if isClassification:
+            with tf.name_scope('predict'+str(self.index)):
+                #preds = tf.nn.softmax(self.output)
+                preds = self.output
+                # argmax returns the index with largest value
+                correctPreds = tf.equal(tf.argmax(preds, 1), tf.argmax(self.trainY, 1))
+                self.accuracy = tf.reduce_sum(tf.cast(correctPreds, tf.float32))
+        else:
+            pass
+
+    def summary(self):
+        '''
+        Create summaries to write on TensorBoard
+        '''
+        with tf.name_scope('summaries'+str(self.index)):
+            tf.summary.scalar('loss', self.loss)
+            if self.isClassification:
+                tf.summary.scalar('accuracy', self.accuracy)
+            tf.summary.histogram('histogram loss', self.loss)
+            #self.summary_op = tf.summary.merge_all()
+
+    def build(self, trainable = True, weights  = None):
+        """
+        :param trainable: (boolean) need training variables
+
+        Build computational graph of the network with loss and optimization operations if trainable
+        """
+        self.buildLayers(weights)
+        if trainable:
+            self.calcLoss()
+            self.optimize()
+            if self.isClassification:
+                self.eval()
+            self.summary()
+
+    def trainOneEpoch(self, sess, x, y):
+        '''
+        :param sess: (tf.Session()) TensorFlow session on which to run the operations
+        :param x: (array) test input for the NN
+        :param y: (array) test output for the NN
+        :return: (float) loss
+        :return: (summaries) summaries
+
+        train one epoch of the network
+        '''
+        _, loss, summaries= sess.run([self.optimizer, self.loss, self.summary_op], feed_dict = {self.trainX:x, self.trainY:y})
+        return loss, summaries
+
+    def trainOneEpoch1(self, sess, x, y):
+        '''
+        :param sess: (tf.Session()) TensorFlow session on which to run the operations
+        :param x: (array) test input for the NN
+        :param y: (array) test output for the NN
+        :return: (float) loss
+        :return: (summaries) summaries
+
+        train one epoch of the network
+        '''
+        _, loss = sess.run([self.optimizer, self.loss], feed_dict = {self.trainX:x, self.trainY:y})
+        return loss
+
+    def getOutput(self, sess, x):
+        """
+        :param sess: (tf.Session()) TensorFlow session
+         on which to run the operations
+        :param x: (array) test input for the NN
+        :return: (float) output of the network
+
+        output of the neural network for input x
+        """
+        return sess.run(self.output, feed_dict={self.trainX:x})
+
+    def getWeights(self):
+        return self.layersParameters
+
+    def getAccuracy(self, sess, x, y):
+        """
+        :param sess: (tf.Session()) TensorFlow session on which to run the operations
+        :param x: (array) test input for the NN
+        :param y: (array) test output for the NN
+        :return: (float) accuracy of a NN for input x
+        :return: (summaries) summaries
+
+        Only for classification, else return 1-loss
+        """
+        if self.isClassification:
+            return sess.run([self.accuracy,self.summary_op],  feed_dict={self.trainX:x, self.trainY:y})
+        else:
+            _, loss, summaries = sess.run([self.optimizer, self.loss, self.summary_op], feed_dict = {self.trainX:x, self.trainY:y})
+            return 1-loss, summaries
+
+class NoisyFFNN(FeedForwardNN):
+    '''
+    Feed forward network that with noisy gradients.
+    Extracts gradients, adds a random noise to them and then applies them
+    '''
+    def __init__(self, numUnits, activationFunctions = None, learningRate = LEARNING_RATE, gamma1 = GAMMA_1, gamma2 = GAMMA_2, delta_t = DELTA_T):
+        FeedForwardNN.__init__(self,numUnits,activationFunctions,learningRate)
+        self.gamma1 = gamma1
+        self.gamma2 = gamma2
+        self.delta_t = delta_t
+        self.gradient_var_pairs = None
+        self.applyGradient = None
+
+    def optimize(self):
+        '''
+        Overide function to define optimization tensors
+        declare optimizer without minimise
+        instead declare compute gradients and apply gradients operations
+        '''
+        self.optimizer = tf.train.GradientDescentOptimizer(self.lr)
+        with tf.name_scope('gradients'+str(self.index)):
+            self.gradient_var_pairs = self.optimizer.compute_gradients(self.loss)
+            var = [x[1] for x in self.gradient_var_pairs]
+            gradients = [x[0] for x in self.gradient_var_pairs]
+            #idx = 0
+            for idx, x in enumerate(gradients):
+                if x is not None:
+                    # generate random noise vectors
+                    #intrinsic = np.random.normal(size=x.get_shape().as_list())
+                    #systematic = np.random.normal(size=x.get_shape().as_list())
+                    intrinsic  = tf.random_normal(tf.shape(x))
+                    systematic = tf.random_normal(tf.shape(x))
+                    # normalize
+                    intrinsic  *= (1/tf.norm(intrinsic))
+                    systematic *= (1/tf.norm(systematic))
+                    x *= (1/tf.norm(x))
+                    #intrinsic *=(1/(np.linalg.norm(intrinsic)))
+                    #systematic *= (1/(np.linalg.norm(systematic)))
+                    # multiply  by scaling factors
+                    intrinsic  *= (-self.gamma2/self.lr)
+                    systematic *= (-self.gamma1/self.lr)
+                    # scaling of intrinsic noise
+                    intrinsic *= (np.sqrt(self.size/self.delta_t))
+                    noise = systematic+intrinsic
+                    gradients[idx] = tf.scalar_mul(self.delta_t,x+noise)
+            self.noisyGradients = gradients
+            # tensorFlow operation to apply gradients to weights
+            self.applyGradient = self.optimizer.apply_gradients(\
+            zip(self.noisyGradients,var), global_step=self.gstep)
+
+    def trainOneEpoch1(self, sess, x, y):
+        '''
+        :param sess: (tf.Session()) TensorFlow session on which to run the operations
+        :param x: (array) test input for the NN
+        :param y: (array) test output for the NN
+        :return: (float) loss
+        :return: (summaries) summaries
+
+        train one epoch of the network
+        '''
+        s_, loss = sess.run([self.applyGradient, self.loss], feed_dict = {self.trainX:x, self.trainY:y})
+        return loss
+
+
+class StudentsTeacher():
+    def __init__(self, sizeTeacher, sizeStudents = None, activationFunctions = None, learningRate = LEARNING_RATE, epochs = NUM_EPOCH, numExamples = NUM_EXAMPLES):
+        """
+        :param sizeTeacher: (tpl/list) Dimensions of teacher neural network. \
+         Number of units for each layer (input, hidden layers, output)
+        :param sizeStudents: (matrix) Dimensions of each student neural network.\
+         They should all have same number of units \
+         in input and output layer as teacher
+        :param activationFunctions: (tpl/list) Activation functions. \
+         The list has size 1, if we want to set all activation functions to that.\
+         Otherwise size len(numUnits)-1
+        :param learningRate: (float) learning rate for the optimizer
+        :param epochs: (int) number of epochs for training
+        :param numExamples: (int) number of examples to train on
+
+        creates student and teacher NN, and initializes random data to train
+        """
+        # self.batchSize = batchSize
+        self.epochs = epochs
+        self.binSize = BIN_SIZE
+        # self.numLayers = len(sizeTeacher)-1
+        self.lr = learningRate
+
+        # if no students are given, use same size as teacher network
+        if not sizeStudents:
+            sizeStudents = [sizeTeacher]
+
+        self.sizeStudents = sizeStudents
+        self.activationFunctions = activationFunctions
+
+        self.numStudents = len(sizeStudents)
+        self.students =  {}
+        self.sizeNNs = {}
+        self.trainingLoss = {}
+        self.learningRates = {}
+
+        # create Teacher neural network (non trainable, doesn't need loss function)
+        self.teacher = FeedForwardNN(sizeTeacher, activationFunctions, learningRate)
+        self.teacher.build(trainable = False)
+
+        self.students = {}
+        self.sizeNNs = {}
+        # training matrix one input array for each epoch. random values between -1 and 1
+        #self.trainX = np.random.uniform(-1,1,size = (sizeTeacher[0],numExamples))
+        self.trainX = np.random.normal(0,1,size = (numExamples,sizeTeacher[0]))
+        self.summary_op = tf.summary.merge_all()
+        self.title = 'MSE for NNs with\nlearnign rate {0} and {1} epochs'.format(self.lr, self.epochs)
+
+        self.buildOneStudent(sizeTeacher,sizeStudents,activationFunctions)
+        self.buildRestStudents(self.students[0].getWeights())
+        #self.buildStudents(sizeTeacher,sizeStudents,activationFunctions)
+
+    def buildNN(self,size):
+        return FeedForwardNN(size,self.activationFunctions,self.lr)
+
+    def buildStudents(self, sizeTeacher, sizeStudents, activationFunctions):
+        # create a neural network for each student
+        for i in range(self.numStudents):
+            size = sizeStudents[i]
+            if size[0] != sizeTeacher[0] or size[-1] != sizeTeacher[-1]:
+                print("Students must have same number of input anf output neurons as teacher")
+                return
+            student = self.buildNN(size)
+            student.build(trainable = True)
+            self.students[i] = student
+            self.sizeNNs[i] = student.size
+
+    def buildOneStudent(self,sizeTeacher,sizeStudents,activationFunctions):
+        i = 0
+        size = sizeStudents[i]
+        if size[0] != sizeTeacher[0] or size[-1] != sizeTeacher[-1]:
+            print("Students must have same number of input anf output neurons as teacher")
+            return
+        student = self.buildNN(size)
+        student.build(trainable = True)
+        self.students[i] = student
+        self.sizeNNs[i] = student.size
+
+    def buildRestStudents(self,referenceWeights):
+        # build the rest of students with the same weights as first student, and new weights = 0
+        # if there is only one student
+        if self.numStudents==1:
+            return
+        elif len(self.sizeStudents[0])==len(self.sizeStudents[1]):
+            # for each student
+            for i in range(1,self.numStudents):
+                layersParameters = {}
+                # the size of the student
+                size = self.sizeStudents[i]
+                # for each layer of the new student
+                for layer in referenceWeights.keys():
+                    print(layer)
+                    # extract the weights and biases of first student
+                    refW = tf.reshape(referenceWeights[layer]['weights'].value(),[-1])
+                    refB = tf.reshape(referenceWeights[layer]['biases'].value(),[-1])
+                    shapeW = [size[layer-1],size[layer]]
+                    zero_padding = tf.zeros(shapeW[0]*shapeW[1]-refW.get_shape().as_list()[0],dtype = refW.dtype)
+                    newW = tf.reshape(tf.concat([refW, zero_padding], 0),shapeW)
+                    shapeB = [size[layer]]
+                    zero_padding = tf.zeros(shapeB[0]-refB.get_shape().as_list()[0],dtype = refB.dtype)
+                    newB = tf.reshape(tf.concat([refB, zero_padding], 0),shapeB)
+                    newLayer = {'weights':newW,
+                                'biases':newB}
+                    layersParameters[layer] = newLayer
+                print(layersParameters)
+                student = self.buildNN(size)
+                student.build(trainable = True, weights = layersParameters)
+                self.students[i] = student
+                self.sizeNNs[i] = student.size
+
+    def run(self):
+        """
+        runs student teacher training
+        each epoch the student networks are trained with the output of the teacher network
+        the average loss over binSize epochs is stored in an array to plot later
+        """
+        #utils.safe_mkdir('checkpoints')
+        #utils.safe_mkdir('checkpoints/NN_Layers')
+
+        with tf.Session() as sess:
+            sess.run(tf.global_variables_initializer())
+            writer = tf.summary.FileWriter('./graphs/NN_Layers', tf.get_default_graph())
+            #saver =  tf.train.Saver()
+            #ckpt = tf.train.get_checkpoint_state(os.path.dirname('checkpoints/NN_layers/checkpoint'))
+            #if ckpt and ckpt.model_checkpoint_path:
+            #    saver.restore(sess,model_checkpoint_path)
+            #w = sess.run(self.students[0].getWeights())
+            #self.buildRestStudents(w)
+            # store training loss and leanring rates of each student
+            trainingLoss = {}
+            learningRates = {}
+            tmpLoss = {}
+            for i in range(self.numStudents):
+                trainingLoss[i] = []
+                learningRates[i] = []
+                tmpLoss[i] = 0
+
+            counter = 0
+
+            # for eac epoch
+            for epoch in range(0,self.epochs):
+                # step of gradient descent
+                step = self.students[0].gstep.eval()
+                # input array of random numbers to train
+                x = self.trainX
+                # output from teacher network is the reference output
+                y = self.teacher.getOutput(sess, x)
+                # for each student train and evaluate loss
+                for i in range(self.numStudents):
+                    if epoch == 0:
+                        output.append(self.students[i].getOutput(sess,x))
+                        loss = sess.run(self.students[i].loss, \
+                        feed_dict = {self.students[i].trainX:x, self.students[i].trainY:y})
+                    else:
+                        # train the student network
+                        loss = self.students[i].trainOneEpoch1(sess,x,y)
+                    #writer.add_summary(summ, global_step= step)
+                    if counter%self.binSize == 0 and counter!=0:
+                        # every binSize epochs add to trainingLoss array the average loss
+                        tmpLoss[i] += loss
+                        trainingLoss[i].append(tmpLoss[i]/self.binSize)
+                        # print('Loss at epoch {0}: {1}'.format(epoch, loss))
+                        # add learning rate over that period
+                        if len(trainingLoss[i])>1:
+                            learningRates[i].append((trainingLoss[i][-2]-trainingLoss[i][-1])/self.binSize)
+                            #print('Learning rates at epoch {0}: {1}'.format(epoch, learningRates[i]))
+                        tmpLoss[i] = 0
+                    else:
+                        tmpLoss[i] += loss
+                        #print('Loss at epoch {0}: {1}'.format(epoch, loss))
+                counter += 1
+                step +=1
+                #print('Number of steps {0}'.format(step))
+                #summ = sess.run(self.summary_op)
+                #writer.add_summary(summ, global_step= step)
+            self.trainingLoss = trainingLoss
+            self.learningRates = learningRates
+        writer.close()
+
+    def plots(self,numPlots = 1):
+        '''
+        Plots triaining loss and learning rate of each student in the same figure, two graphs
+        '''
+        outputName = '{path}{date:%Y-%m-%d_%H%M%S}.png'.format(path = GRAPH_OUTPUT_PATH, date=datetime.datetime.now())
+        averageLR = ['{0:.3g}'.format(np.mean(self.trainingLoss[i])) for i in range(self.numStudents)]
+        steadyStateMSE = ['{0:.3g}'.format(self.trainingLoss[i][-1]) for i in range(self.numStudents)]
+        if numPlots == 2:
+            fig, ax = plt.subplots(numPlots,sharex=True)
+            for i in range(self.numStudents):
+                ax[0].plot(self.trainingLoss[i], label = '{0} synapses'.format(self.sizeNNs[i]))
+                ax[1].plot(self.learningRates[i], label = '{0} synapses'.format(self.sizeNNs[i]))
+                ax[0].legend()
+                ax[1].legend()
+                ax[0].set_ylabel('MSE')
+                ax[1].set_ylabel('Learning rate')
+                ax[1].set_xlabel('Number of epochs (every {0})'.format(self.binSize))
+                fig.suptitle(self.title)
+        elif numPlots ==1 :
+            fig, ax = plt.subplots()
+            for i in range(self.numStudents):
+                ax.plot(self.trainingLoss[i], label = '{0} synapses'.format(self.sizeNNs[i]))
+                ax.legend()
+                ax.set_ylabel('MSE')
+                ax.set_xlabel('Number of epochs (every {0})'.format(self.binSize))
+                #ax.set_title(self.title+'\n steady state MSE {0:1.3g},\n average learning rate {1:1.3g}'.format(np.array(steadyStateMSE),np.array(averageLR)))
+                ax.set_title(self.title+'\n steady state MSE {0},\n average learning rate {1}'.format(steadyStateMSE,averageLR))
+        plt.tight_layout()
+        fig.savefig(outputName)
+        plt.close()
+        print('intial MSE',[self.trainingLoss[i][0] for i in range(self.numStudents)])
+        #print(self.sizeStudents)
+
+    def plotsAll(self):
+        #print(self.trainingLoss)
+        outputName = '{path}{date:%Y-%m-%d_%H%M%S}.png'.format(path = GRAPH_OUTPUT_PATH, date=datetime.datetime.now())
+        fig, ax = plt.subplots(2,2,sharex=True)
+        for i in range(self.numStudents):
+            ax[0,0].plot(self.trainingLoss[i], label = '{0} synapses'.format(self.sizeNNs[i]))
+            ax[1,0].plot(self.learningRates[i], label = '{0} synapses'.format(self.sizeNNs[i]))
+            ax[0,1].plot(self.trainingLoss[0])
+            ax[1,1].plot(self.learningRates[0])
+            ax[0,0].legend()
+            ax[1,0].legend()
+            ax[0,0].set_ylabel('MSE')
+            ax[1,0].set_ylabel('Learning rate')
+            ax[1,0].set_xlabel('Number of epochs (every {0})'.format(self.binSize))
+        fig.suptitle(self.title)
+        fig.savefig(outputName)
+        plt.close()
+
+class NoisyStudentsTeacher(StudentsTeacher):
+    def __init__(self, sizeTeacher, sizeStudents = None, activationFunctions = None, learningRate = LEARNING_RATE, gamma1 = GAMMA_1, gamma2 = GAMMA_2, epochs = NUM_EPOCH,numExamples = NUM_EXAMPLES, delta_t = DELTA_T):
+        """
+        :param sizeTeacher: (tpl/list) Dimensions of teacher neural network. Number of units for each layer (input, hidden layers, output)
+        :param sizeStudents: (matrix) Dimensions of each student neural network. They should all have same number of units in input and output layer as teacher
+        :param activationFunctions: (tpl/list) Activation functions. The list has size 1, if we want to set all activation functions to that. Otherwise size len(numUnits)-1
+        :param learningRate: (float) learning rate for the optimizer (learnign algorithm)
+        :param epochs: (int) number of epochs for training
+
+        creates student and teacher NN, and initializes random data to train
+        """
+        self.gamma1 = gamma1
+        self.gamma2 = gamma2
+        self.delta_t = delta_t
+        StudentsTeacher.__init__(self, sizeTeacher, sizeStudents, activationFunctions, learningRate, epochs, numExamples)
+        self.title = 'MSE for NNs with learnign rate {0}, {1} epochs\nand noisy gradient with gamma2={2}, gamma3={3}, T={4} '.format(learningRate, epochs, gamma1, gamma2, delta_t)
+        #self.title = 'MSE for NNs with learnign rate {0}, {1} epochs\nand noisy gradient with gamma2={2}'.format(learningRate, epochs, gamma2)
+
+    def buildNN(self,size):
+        return NoisyFFNN(size,self.activationFunctions,\
+        self.lr,self.gamma1,self.gamma2,self.delta_t)
+
+def teacherSize(numLayers = NUM_LAYERS, numInput = NUM_INPUT, numOutput = NUM_OUTPUT):
+    size = np.random.randint(MIN_UNITS,MAX_UNITS,size = numLayers)
+    size[0] = numInput
+    size[-1] = numOutput
+    return size
+
+def studentSize(teacherSize, studentScaling = STUDENT_SCALING, scaleLayers = False):
+    # creates the arrays of sizes for students from size  of teacher network scaled
+    # number of layers for each student is multiplied by scaling
+    if scaleLayers:
+        layers = [int(x*len(teacherSize)) for x in studentScaling]
+    else:
+        layers = [int(1*len(teacherSize)) for x in studentScaling]
+    sizes = []
+    # for each student
+    for i in range(len(layers)):
+        # if the scaling is one return the same size as teacher
+        if studentScaling[i] == 1:
+            sizes.append(teacherSize)
+        else:
+            # scale max number of units added to each layer
+            maxU = int(MAX_UNITS*studentScaling[i])
+            # add random number of units to the layers in teacher
+            newSize = teacherSize+np.random.randint(MIN_UNITS,maxU, size=len(teacherSize))
+            # add layers with random number of units to the expanded layers of teacher
+            sizes.append(np.concatenate((newSize,np.random.randint(MIN_UNITS,maxU,size=layers[i]-len(teacherSize)))))
+            # change number inputs and outputs to same as teacher
+            sizes[i][0] = teacherSize[0]
+            sizes[i][-1] = teacherSize[-1]
+    return sizes
+
+
+if __name__ == '__main__':
+    tf.reset_default_graph()
+    #teacher = teacherSize()
+    #print(teacher)
+    #students = studentSize(teacher)
+    #print(students)
+    teacher = [10, 7,  10]
+    students = [np.array([10, 7, 10]), np.array([ 10, 40, 10]), \
+    np.array([ 10, 400, 10])]
+    #teacher = [1, 2, 1]
+    #students = [np.array([1, 2, 1]), np.array([ 1,4,1]), np.array([ 1,8,1])]
+    #model = NoisyStudentsTeacher(teacher,students)
+    model = StudentsTeacher(teacher,students)
+    model.run()
+    model.plots(1)

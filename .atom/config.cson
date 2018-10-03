@@ -1,0 +1,33 @@
+"*":
+  "atom-beautify":
+    general:
+      _analyticsUserId: "de157e1d-22e9-48d3-a486-73ae593458ad"
+  core:
+    disabledPackages: [
+      "language-gfm"
+      "markdown-preview"
+    ]
+    telemetryConsent: "limited"
+    themes: [
+      "unity-ui"
+      "one-o-eight-syntax"
+    ]
+  editor: {}
+  "exception-reporting":
+    userId: "3b045aa3-aa6c-4f64-a80e-226c84ba0878"
+  "highlight-selected":
+    showResultsOnScrollBar: true
+  "spell-check":
+    grammars: [
+      "source.asciidoc"
+      "source.gfm"
+      "text.git-commit"
+      "text.plain"
+      "text.plain.null-grammar"
+      "source.rst"
+      "text.restructuredtext"
+      "text.md"
+    ]
+  "split-diff": {}
+  welcome:
+    showOnStartup: false
