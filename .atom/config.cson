@@ -10,13 +10,16 @@
     telemetryConsent: "limited"
     themes: [
       "unity-ui"
-      "one-o-eight-syntax"
+      "one-dark-syntax"
     ]
   editor: {}
   "exception-reporting":
     userId: "3b045aa3-aa6c-4f64-a80e-226c84ba0878"
   "highlight-selected":
     showResultsOnScrollBar: true
+  "package-sync":
+    createOnChange: true
+    forceOverwrite: true
   "spell-check":
     grammars: [
       "source.asciidoc"
