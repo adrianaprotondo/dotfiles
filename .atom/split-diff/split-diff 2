@@ -1,643 +1,540 @@
-######################################################################################
-## NeuralNetwork_5.py
-## Adriana Perez Rotondo
-## July 2018
-##
-## Tensorflow implementation of student teacher for feed forward neural network
-## Student teacher class can train multiple students of different sizes at the same time
-## Noise added to gradient
-##
-## Returns: creates a graph in the "GRAPH_OUTPUT_PATH" with loss and learning rate plotted
-##          per epoch
-######################################################################################
+
+%----------------------------------------------------------------------------------------
+%	PACKAGES AND DOCUMENT CONFIGURATIONS
+%----------------------------------------------------------------------------------------
+
+\documentclass{article}
+\usepackage[utf8]{inputenc}
 
 
-import tensorflow as tf
-import numpy as np
-import matplotlib.pyplot as plt
-import datetime
-#import utils
+\usepackage[version=3]{mhchem} % Package for chemical equation typesetting
+\usepackage{siunitx} % Provides the \SI{}{} and \si{} command for typesetting SI units
+\usepackage{graphicx} % Required for the inclusion of images
 
-IS_CLASSIFICATION = False
-NUM_INPUT = 10
-NUM_OUTPUT = 8
-NUM_LAYERS = 3
-MAX_UNITS = 100
-MIN_UNITS = 20
-STUDENT_SCALING = [1,5,10]
-LEARNING_RATE = 0.01
-GAMMA_1 = 1
-GAMMA_2 = 0
-DELTA_T=2
-NUM_EPOCH = 1000
-NUM_EXAMPLES = 1000
-BIN_SIZE = 1
-GRAPH_OUTPUT_PATH = "./OutputGraphs/"
+\usepackage[numbers]{natbib} % Required to change bibliography style to APA
+\usepackage{amsmath} % Required for some math elements 
+\usepackage{hyperref}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage[table]{xcolor}
+\usepackage{array}
+\usepackage{url}
 
-class NeuralNetwork():
-    ''' Any form of neural network'''
+\usepackage[rightcaption]{sidecap}
+\usepackage{wrapfig}
 
-    def __init__(self, numUnits, activationFunctions = None,\
-     learningRate = LEARNING_RATE, isClassification = IS_CLASSIFICATION):
-        """
-        :param numUnits: (tpl/list) Dimensions of the neural network.\
-        Number of units for each layer (input, hidden layers, output)
-        :param activationFunctions: (tpl/list) Activation functions.\
-        Array has size 1, if want to set all activation functions to that.\
-        Otherwise size len(numUnits)-1
-        :param learningRate: (float) learning rate for the optimizer
-        :param isClassification: (boolean) classification problem or not
-        """
-        # float number of hidden layers + output layer (don't count input layer)
-        self.numLayers = len(numUnits)
-        # array with the number of units in each layer (input + hidden + output)
-        self.numUnits = numUnits
-        # size is total number of synapses
-        self.size = sum([numUnits[i-1]*numUnits[i] for i in range(1,len(numUnits))])
-        # dictionary with the activation functions for each layer
-        if activationFunctions and len(activationFunctions)==1:
-            # if only one activation is given, set that as the activation
-            # for all layers
-            self.activationFunctions = [activationFunctions[0]\
-             for i in range(self.numLayers)]
-        else:
-            self.activationFunctions = activationFunctions
-        # weights and biases
-        self.layersParameters = {}
-        self.layersCompute = {}
+\newcolumntype{L}{>{\centering\arraybackslash}m{3cm}}
 
-        # training parameters
-        self.loss = None
-        self.optimizer = None
-        self.accuracy = None
-        self.lr = learningRate
-        self.gstep = tf.Variable(0, dtype=tf.int32, trainable=False,\
-         name='global_step')
-        self.isClassification = isClassification
+\graphicspath{{./figures/}}
 
-class FeedForwardNN(NeuralNetwork):
-    ''' Feedforward neural network fully connected'''
-    # class varibale keeps track of number of netowrks created for naming purposes
-    counter = 0
+\usepackage[margin=1in]{geometry}
+\usepackage{gensymb}
+%
+%\addtolength{\oddsidemargin}{-.875in}
+%\addtolength{\evensidemargin}{-.875in}
+%\addtolength{\textwidth}{1.75in}
+%
+%\addtolength{\topmargin}{-.875in}
+%\addtolength{\textheight}{1.75in}
 
-    # python calls automatically the constructor of the base cass NeuralNetwork
-    def __init__(self, numUnits, activationFunctions = None,\
-     learningRate = LEARNING_RATE):
-        # NN index (for tf varibales naming)
-        self.index = FeedForwardNN.counter
-        self.scope = 'NN'+str(self.index)
-        FeedForwardNN.counter +=1
-        with tf.variable_scope(self.scope) as scope:
-            NeuralNetwork.__init__(self, numUnits, activationFunctions, learningRate)
-            # tf Graph input and output
-            self.trainX = tf.placeholder(dtype=tf.float32, \
-            shape = [None, self.numUnits[0]], name = 'trainX')
-            self.trainY = tf.placeholder(tf.float32, \
-            [None, self.numUnits[self.numLayers-1]], name = 'trainY')
+%\setlength\parindent{0pt} % Removes all indentation from paragraphs
+
+\renewcommand{\labelenumi}{\alph{enumi}.} % Make numbering in the enumerate environment by letter rather than number (e.g. section 6)
+
+\usepackage{times} % Uncomment to use the Times New Roman font
+  
+\usepackage{wasysym} 
+\newenvironment{checklist}{%
+  \begin{list}{}{}% whatever you want the list to be
+  \let\olditem\item
+  \renewcommand\item{\olditem -- \marginpar{$\Box$} }
+  \newcommand\checkeditem{\olditem -- \marginpar{$\CheckedBox$} }
+}{%
+  \end{list}
+}   
 
 
 
-    def buildLayers(self, weights = None):
-        '''
-        creates the layers of the neural network as tf operations with weights and biases
 
-        '''
-        # scope makes the tensorboard tidier by goruping variables
-        scope = self.scope
-        with tf.variable_scope(scope) as scope:
-            if  not weights:
-                # for each layer except input
-                for i in range(1, len(self.numUnits)):
-                    # initialize weights and biases as tf variables with initializer
-                    newLayer = {
-                        # weights are initialized as normal variables
-                        'weights': tf.get_variable(name='weights_'+str(self.index)+'_'+str(i), shape=(self.numUnits[i-1], self.numUnits[i]),
-                                initializer=tf.random_normal_initializer(stddev=np.sqrt(self.numUnits[i-1]*self.numUnits[i]))),
-                        'biases': tf.get_variable(name='bias_'+str(self.index)+'_'+str(i), shape=(self.numUnits[i]),
-                                initializer=tf.random_normal_initializer(stddev=np.sqrt(self.numUnits[i])))}
-                    self.layersParameters[i] = newLayer
-            else:
-                self.layersParameters = weights
-            for i in range(1, len(self.numUnits)):
-                # define layer
-                if i==1:
-                    # first layer has trainX as input
-                    l = tf.add(tf.matmul(self.trainX, self.layersParameters[i]['weights']), self.layersParameters[i]['biases'])
-                else:
-                    # the rest of layers has previous layer output as input
-                    l = tf.add(tf.matmul(self.layersCompute[i-1], self.layersParameters[i]['weights']), self.layersParameters[i]['biases'])
+%----------------------------------------------------------------------------------------
+%	DOCUMENT INFORMATION
+%----------------------------------------------------------------------------------------
 
-                # add activation function
-                if False:
-                #if i == len(self.numUnits)-1 and not self.isClassification:
-                    # apply activation function except output layer in linear regression
-                    # because ouptput is unbounded
-                    #l = tf.nn.relu(l)
-                    pass
-                else:
-                    if not self.activationFunctions:
-                        # default activation function is sigmoid
-                        l = tf.sigmoid(l)
-                    elif self.activationFunctions[i] == "relu":
-                        l = tf.nn.relu(l)
-                    elif self.activationFunctions[i] == "sigmoid":
-                        l = tf.sigmoid(l)
-                    elif self.activationFunctions[i] == "tanh":
-                        l = tf.tanh(l)
-                    else:
-                        l = tf.sigmoid(l)
+\title{Columbia University E. K. A. Advanced Physics Laboratory \\  The Cosmic Microwave Background \\Lab Manual \\ } % Title
 
-                # add layer to the dictionary of layers
-                self.layersCompute[i] = l
-        # last layer is the output of the NN
-        self.output = self.layersCompute[len(self.numUnits)-1]
-        #print('Layer parameters of nn {0} are {1}'.format(self.index,self.layersParameters))
-        #print('Layers of nn {0} are {1}'.format(self.index,self.layersCompute))
+\author{Alexander Leunig\\ Adriana Perez Rotondo \\ Max Abitbol (TA) \\Professor Morgan May} % Author name
 
-    def calcLoss(self):
-        '''
-        define loss function
-        for classifaction problem:
-            use softmax cross entropy with logits as the loss function
-            compute mean cross entropy, softmax is applied internally
-        for regression problem:
-            use mean square error
-        '''
-        with tf.name_scope('loss'+str(self.index)):
-            if self.isClassification:
-                entropy = tf.nn.softmax_cross_entropy_with_logits(labels=self.trainY, logits=self.output)
-                self.loss = tf.reduce_mean(entropy, name='loss')
-            else:
-                #print(self.trainY)
-                #self.loss = tf.reduce_sum((self.output-self.trainY)**2)
-                self.loss = tf.reduce_sum(tf.squared_difference(self.output, self.trainY))
-                #self.loss = tf.reduce_mean(tf.reduce_sum(tf.squared_difference(self.output, self.trainY),0),0)
-                #self.loss = (1/self.numUnits[-1])*tf.reduce_sum(tf.reduce_sum((self.output-self.trainY)**2,1))
+\date{December 2016} % Date for the report
 
-    def optimize(self):
-        '''
-        Define training operation
-        using Adam Gradient Descent to minimize cost
-        or gradient descent
-        '''
-        #self.optimizer = tf.train.AdamOptimizer(self.lr).minimize(self.loss,global_step=self.gstep)
-        self.optimizer = tf.train.GradientDescentOptimizer(self.lr).minimize(self.loss,global_step=self.gstep)
+\begin{document}
 
-    def eval(self):
-        '''
-        Count the number of right predictions in a batch for classification problem
-        '''
-        if isClassification:
-            with tf.name_scope('predict'+str(self.index)):
-                #preds = tf.nn.softmax(self.output)
-                preds = self.output
-                # argmax returns the index with largest value
-                correctPreds = tf.equal(tf.argmax(preds, 1), tf.argmax(self.trainY, 1))
-                self.accuracy = tf.reduce_sum(tf.cast(correctPreds, tf.float32))
-        else:
-            pass
-
-    def summary(self):
-        '''
-        Create summaries to write on TensorBoard
-        '''
-        with tf.name_scope('summaries'+str(self.index)):
-            tf.summary.scalar('loss', self.loss)
-            if self.isClassification:
-                tf.summary.scalar('accuracy', self.accuracy)
-            tf.summary.histogram('histogram loss', self.loss)
-            #self.summary_op = tf.summary.merge_all()
-
-    def build(self, trainable = True, weights  = None):
-        """
-        :param trainable: (boolean) need training variables
-
-        Build computational graph of the network with loss and optimization operations if trainable
-        """
-        self.buildLayers(weights)
-        if trainable:
-            self.calcLoss()
-            self.optimize()
-            if self.isClassification:
-                self.eval()
-            self.summary()
-
-    def trainOneEpoch(self, sess, x, y):
-        '''
-        :param sess: (tf.Session()) TensorFlow session on which to run the operations
-        :param x: (array) test input for the NN
-        :param y: (array) test output for the NN
-        :return: (float) loss
-        :return: (summaries) summaries
-
-        train one epoch of the network
-        '''
-        _, loss, summaries= sess.run([self.optimizer, self.loss, self.summary_op], feed_dict = {self.trainX:x, self.trainY:y})
-        return loss, summaries
-
-    def trainOneEpoch1(self, sess, x, y):
-        '''
-        :param sess: (tf.Session()) TensorFlow session on which to run the operations
-        :param x: (array) test input for the NN
-        :param y: (array) test output for the NN
-        :return: (float) loss
-        :return: (summaries) summaries
-
-        train one epoch of the network
-        '''
-        _, loss = sess.run([self.optimizer, self.loss], feed_dict = {self.trainX:x, self.trainY:y})
-        return loss
-
-    def getOutput(self, sess, x):
-        """
-        :param sess: (tf.Session()) TensorFlow session
-         on which to run the operations
-        :param x: (array) test input for the NN
-        :return: (float) output of the network
-
-        output of the neural network for input x
-        """
-        return sess.run(self.output, feed_dict={self.trainX:x})
-
-    def getWeights(self):
-        return self.layersParameters
-
-    def getAccuracy(self, sess, x, y):
-        """
-        :param sess: (tf.Session()) TensorFlow session on which to run the operations
-        :param x: (array) test input for the NN
-        :param y: (array) test output for the NN
-        :return: (float) accuracy of a NN for input x
-        :return: (summaries) summaries
-
-        Only for classification, else return 1-loss
-        """
-        if self.isClassification:
-            return sess.run([self.accuracy,self.summary_op],  feed_dict={self.trainX:x, self.trainY:y})
-        else:
-            _, loss, summaries = sess.run([self.optimizer, self.loss, self.summary_op], feed_dict = {self.trainX:x, self.trainY:y})
-            return 1-loss, summaries
-
-class NoisyFFNN(FeedForwardNN):
-    '''
-    Feed forward network that with noisy gradients.
-    Extracts gradients, adds a random noise to them and then applies them
-    '''
-    def __init__(self, numUnits, activationFunctions = None, learningRate = LEARNING_RATE, gamma1 = GAMMA_1, gamma2 = GAMMA_2, delta_t = DELTA_T):
-        FeedForwardNN.__init__(self,numUnits,activationFunctions,learningRate)
-        self.gamma1 = gamma1
-        self.gamma2 = gamma2
-        self.delta_t = delta_t
-        self.gradient_var_pairs = None
-        self.applyGradient = None
-
-    def optimize(self):
-        '''
-        Overide function to define optimization tensors
-        declare optimizer without minimise
-        instead declare compute gradients and apply gradients operations
-        '''
-        self.optimizer = tf.train.GradientDescentOptimizer(self.lr)
-        with tf.name_scope('gradients'+str(self.index)):
-            self.gradient_var_pairs = self.optimizer.compute_gradients(self.loss)
-            var = [x[1] for x in self.gradient_var_pairs]
-            gradients = [x[0] for x in self.gradient_var_pairs]
-            #idx = 0
-            for idx, x in enumerate(gradients):
-                if x is not None:
-                    # generate random noise vectors
-                    #intrinsic = np.random.normal(size=x.get_shape().as_list())
-                    #systematic = np.random.normal(size=x.get_shape().as_list())
-                    intrinsic  = tf.random_normal(tf.shape(x))
-                    systematic = tf.random_normal(tf.shape(x))
-                    # normalize
-                    intrinsic  *= (1/tf.norm(intrinsic))
-                    systematic *= (1/tf.norm(systematic))
-                    x *= (1/tf.norm(x))
-                    #intrinsic *=(1/(np.linalg.norm(intrinsic)))
-                    #systematic *= (1/(np.linalg.norm(systematic)))
-                    # multiply  by scaling factors
-                    intrinsic  *= (-self.gamma2/self.lr)
-                    systematic *= (-self.gamma1/self.lr)
-                    # scaling of intrinsic noise
-                    intrinsic *= (np.sqrt(self.size/self.delta_t))
-                    noise = systematic+intrinsic
-                    gradients[idx] = tf.scalar_mul(self.delta_t,x+noise)
-            self.noisyGradients = gradients
-            # tensorFlow operation to apply gradients to weights
-            self.applyGradient = self.optimizer.apply_gradients(\
-            zip(self.noisyGradients,var), global_step=self.gstep)
-
-    def trainOneEpoch1(self, sess, x, y):
-        '''
-        :param sess: (tf.Session()) TensorFlow session on which to run the operations
-        :param x: (array) test input for the NN
-        :param y: (array) test output for the NN
-        :return: (float) loss
-        :return: (summaries) summaries
-
-        train one epoch of the network
-        '''
-        s_, loss = sess.run([self.applyGradient, self.loss], feed_dict = {self.trainX:x, self.trainY:y})
-        return loss
+\maketitle % Insert the title, author and date
 
 
-class StudentsTeacher():
-    def __init__(self, sizeTeacher, sizeStudents = None, activationFunctions = None, learningRate = LEARNING_RATE, epochs = NUM_EPOCH, numExamples = NUM_EXAMPLES):
-        """
-        :param sizeTeacher: (tpl/list) Dimensions of teacher neural network. \
-         Number of units for each layer (input, hidden layers, output)
-        :param sizeStudents: (matrix) Dimensions of each student neural network.\
-         They should all have same number of units \
-         in input and output layer as teacher
-        :param activationFunctions: (tpl/list) Activation functions. \
-         The list has size 1, if we want to set all activation functions to that.\
-         Otherwise size len(numUnits)-1
-        :param learningRate: (float) learning rate for the optimizer
-        :param epochs: (int) number of epochs for training
-        :param numExamples: (int) number of examples to train on
+% If you wish to include an abstract, uncomment the lines below
+\begin{abstract}
+In this lab you will use a radio telescope to measure the power of the radiation from the Cosmic Microwave Background (CMB). Using this data, as well as careful calibration measurements, you will be able to compute the actual temperature of the CMB. This document will walk you through the theory behind the measurements, the setup, the data collection procedure and the analysis.
+ \end{abstract}
+\tableofcontents
 
-        creates student and teacher NN, and initializes random data to train
-        """
-        # self.batchSize = batchSize
-        self.epochs = epochs
-        self.binSize = BIN_SIZE
-        # self.numLayers = len(sizeTeacher)-1
-        self.lr = learningRate
+\pagebreak 
 
-        # if no students are given, use same size as teacher network
-        if not sizeStudents:
-            sizeStudents = [sizeTeacher]
+%----------------------------------------------------------------------------------------
+%	Introduction
+%----------------------------------------------------------------------------------------
 
-        self.sizeStudents = sizeStudents
-        self.activationFunctions = activationFunctions
+\section{Introduction}
 
-        self.numStudents = len(sizeStudents)
-        self.students =  {}
-        self.sizeNNs = {}
-        self.trainingLoss = {}
-        self.learningRates = {}
+\begin{wrapfigure}{r}{0.4\textwidth} %this figure will be at the right
+    \centering
+    \includegraphics[width=0.38\textwidth]{holmdel_antenna.jpeg}
+    \caption{Holmdel Antenna, NASA}
+\end{wrapfigure}
 
-        # create Teacher neural network (non trainable, doesn't need loss function)
-        self.teacher = FeedForwardNN(sizeTeacher, activationFunctions, learningRate)
-        self.teacher.build(trainable = False)
+The cosmic microwave background (CMB) is the thermal radiation that originated from the last scattering surface. Some 380,000 years after the Big Bang, during a period known as recombination, the plasma of hot electrons, protons, neutrons and photons had cooled enough for protons to capture electrons and form stable and neutral hydrogen (and helium) atoms. Since low energy photons rarely interact with neutral atoms, with this formation, the mean free path of photons increased drastically  - the photons were not limited by Thompson scattering any more \cite{bradt_astrophysics_2014}. As soon as their mean free path length approached the length of the visible universe, photons were able to travel freely without losing any information in scattering processes. Thus, measuring the cosmic microwave background temperature helps us understand the process of recombination and leads to important predictions in Cosmology. One is the following example:
 
-        self.students = {}
-        self.sizeNNs = {}
-        # training matrix one input array for each epoch. random values between -1 and 1
-        #self.trainX = np.random.uniform(-1,1,size = (sizeTeacher[0],numExamples))
-        self.trainX = np.random.normal(0,1,size = (numExamples,sizeTeacher[0]))
-        self.summary_op = tf.summary.merge_all()
-        self.title = 'MSE for NNs with\nlearnign rate {0} and {1} epochs'.format(self.lr, self.epochs)
+The Saha equation relates the fraction of ionized hydrogen atoms to other parameters, especially redshift z and temperature T:
 
-        self.buildOneStudent(sizeTeacher,sizeStudents,activationFunctions)
-        self.buildRestStudents(self.students[0].getWeights())
-        #self.buildStudents(sizeTeacher,sizeStudents,activationFunctions)
+\begin{equation}
+    \frac{{n_e}^2}{n - n_e} = \frac{2}{\Lambda^3} \frac{g_1}{g_0} e^{-\frac{E}{k_b T}}   
+\end{equation}
 
-    def buildNN(self,size):
-        return FeedForwardNN(size,self.activationFunctions,self.lr)
+where $n_e$ is the density of electrons during recombination, $n$ is the density of hydrogen atoms, $\Lambda$ is the de Broglie wavelength with $\Lambda = {\sqrt{\frac{h^2}{2 \pi m_e k_b }}}$, and $E$ is the ionization energy of hydrogen (13.6eV.)
 
-    def buildStudents(self, sizeTeacher, sizeStudents, activationFunctions):
-        # create a neural network for each student
-        for i in range(self.numStudents):
-            size = sizeStudents[i]
-            if size[0] != sizeTeacher[0] or size[-1] != sizeTeacher[-1]:
-                print("Students must have same number of input anf output neurons as teacher")
-                return
-            student = self.buildNN(size)
-            student.build(trainable = True)
-            self.students[i] = student
-            self.sizeNNs[i] = student.size
+Taking $n_p$ as the density of protons and $n_H$ as the density of hydrogen, we can relate the ratio $f = \frac{n_e}{n_p + n_H}$ to a temperature
 
-    def buildOneStudent(self,sizeTeacher,sizeStudents,activationFunctions):
-        i = 0
-        size = sizeStudents[i]
-        if size[0] != sizeTeacher[0] or size[-1] != sizeTeacher[-1]:
-            print("Students must have same number of input anf output neurons as teacher")
-            return
-        student = self.buildNN(size)
-        student.build(trainable = True)
-        self.students[i] = student
-        self.sizeNNs[i] = student.size
+\begin{equation}
+\frac{f^2}{1-f} = \frac{1}{n_p + n_H} \frac{1}{\Lambda^3} e^{-\frac{E}{k_b T}}
+\end{equation}
 
-    def buildRestStudents(self,referenceWeights):
-        # build the rest of students with the same weights as first student, and new weights = 0
-        # if there is only one student
-        if self.numStudents==1:
-            return
-        elif len(self.sizeStudents[0])==len(self.sizeStudents[1]):
-            # for each student
-            for i in range(1,self.numStudents):
-                layersParameters = {}
-                # the size of the student
-                size = self.sizeStudents[i]
-                # for each layer of the new student
-                for layer in referenceWeights.keys():
-                    print(layer)
-                    # extract the weights and biases of first student
-                    refW = tf.reshape(referenceWeights[layer]['weights'].value(),[-1])
-                    refB = tf.reshape(referenceWeights[layer]['biases'].value(),[-1])
-                    shapeW = [size[layer-1],size[layer]]
-                    zero_padding = tf.zeros(shapeW[0]*shapeW[1]-refW.get_shape().as_list()[0],dtype = refW.dtype)
-                    newW = tf.reshape(tf.concat([refW, zero_padding], 0),shapeW)
-                    shapeB = [size[layer]]
-                    zero_padding = tf.zeros(shapeB[0]-refB.get_shape().as_list()[0],dtype = refB.dtype)
-                    newB = tf.reshape(tf.concat([refB, zero_padding], 0),shapeB)
-                    newLayer = {'weights':newW,
-                                'biases':newB}
-                    layersParameters[layer] = newLayer
-                print(layersParameters)
-                student = self.buildNN(size)
-                student.build(trainable = True, weights = layersParameters)
-                self.students[i] = student
-                self.sizeNNs[i] = student.size
+Using $T = 2.7 (1+z)$ and $n_p + n_H = 1.6 (1+z)^3$ we can solve this equation and see that recombination for a 50\% fraction of ionized hydrogen atoms occurs at roughly $4000K$ and $z=1500$. Hence using our temperature measurement, we were able to predict the temperature at which recombination happened, as well as the redshift. 
 
-    def run(self):
-        """
-        runs student teacher training
-        each epoch the student networks are trained with the output of the teacher network
-        the average loss over binSize epochs is stored in an array to plot later
-        """
-        #utils.safe_mkdir('checkpoints')
-        #utils.safe_mkdir('checkpoints/NN_Layers')
+\subsection{History}
+Although the CMB was predicted independently by several theoretical physicists as early as 1948, it was only discovered in 1965 by Arno Penzias and Robert Wilson using the Homdel Horn antenna. This aluminum antenna was about 15m by 10m (ca. 36m$^2$ aperture) originally designed to detect radio waves reflected off satellites and high altitude balloons at about 2.36 GHz – enough to catch a glimpse of the constant radio signal that comes from all directions of space: the cosmic microwave background \cite{levine_arno_2009}. The existence of the microwave background not only confirmed predictions and the current understanding of the universe, but also provided a window to look further back in time. Anisotropies (inhomogeneities) in the cosmic microwave background temperature across the sky can be used to measure the curvature of the universe, the baryon density, the dark matter density of the universe, the Hubble constant, age of the universe, dark energy density among others.
+After Penzias and Wilsons initial experiment many more have been launched, with the satellites COBE (1989), WMAP (2001) and Planck (2009) being some of the most successful ones. Figures \ref{fig:cmbPenzias}-\ref{fig:cmbPlanck}  show the extent to which the measurements of the CMB have been refined over the last 50 years. While Penzias and Wilson could only measure a constant temperature all across the sky, Planck is able to detected temperature anisotropies in a spectrum between 30 and 857 GHz with a fluctuation of $\frac{\Delta T}{T} =10^{-6}$ at 10 arcminutes angular resolution \cite{_esa_2015}.
 
-        with tf.Session() as sess:
-            sess.run(tf.global_variables_initializer())
-            writer = tf.summary.FileWriter('./graphs/NN_Layers', tf.get_default_graph())
-            #saver =  tf.train.Saver()
-            #ckpt = tf.train.get_checkpoint_state(os.path.dirname('checkpoints/NN_layers/checkpoint'))
-            #if ckpt and ckpt.model_checkpoint_path:
-            #    saver.restore(sess,model_checkpoint_path)
-            #w = sess.run(self.students[0].getWeights())
-            #self.buildRestStudents(w)
-            # store training loss and leanring rates of each student
-            trainingLoss = {}
-            learningRates = {}
-            tmpLoss = {}
-            for i in range(self.numStudents):
-                trainingLoss[i] = []
-                learningRates[i] = []
-                tmpLoss[i] = 0
+% CMB figures:
 
-            counter = 0
+\begin{SCfigure}[0.6][p]
+\caption{
+Constant CMB temperature accross the sky as was measured by Penzias and Wilson (and what you will measure), Cardiff University}  \label{fig:cmbPenzias}
+\includegraphics[width=0.6\textwidth]{COBE_penzias_wilson_cmb.jpg}
+\end{SCfigure}
 
-            # for eac epoch
-            for epoch in range(0,self.epochs):
-                # step of gradient descent
-                step = self.students[0].gstep.eval()
-                # input array of random numbers to train
-                x = self.trainX
-                # output from teacher network is the reference output
-                y = self.teacher.getOutput(sess, x)
-                # for each student train and evaluate loss
-                for i in range(self.numStudents):
-                    if epoch == 0:
-                        output.append(self.students[i].getOutput(sess,x))
-                        loss = sess.run(self.students[i].loss, \
-                        feed_dict = {self.students[i].trainX:x, self.students[i].trainY:y})
-                    else:
-                        # train the student network
-                        loss = self.students[i].trainOneEpoch1(sess,x,y)
-                    #writer.add_summary(summ, global_step= step)
-                    if counter%self.binSize == 0 and counter!=0:
-                        # every binSize epochs add to trainingLoss array the average loss
-                        tmpLoss[i] += loss
-                        trainingLoss[i].append(tmpLoss[i]/self.binSize)
-                        # print('Loss at epoch {0}: {1}'.format(epoch, loss))
-                        # add learning rate over that period
-                        if len(trainingLoss[i])>1:
-                            learningRates[i].append((trainingLoss[i][-2]-trainingLoss[i][-1])/self.binSize)
-                            #print('Learning rates at epoch {0}: {1}'.format(epoch, learningRates[i]))
-                        tmpLoss[i] = 0
-                    else:
-                        tmpLoss[i] += loss
-                        #print('Loss at epoch {0}: {1}'.format(epoch, loss))
-                counter += 1
-                step +=1
-                #print('Number of steps {0}'.format(step))
-                #summ = sess.run(self.summary_op)
-                #writer.add_summary(summ, global_step= step)
-            self.trainingLoss = trainingLoss
-            self.learningRates = learningRates
-        writer.close()
+\begin{SCfigure}[0.6][p]
+\caption{
+CMB anisotopies accross the sky as measured by COBE, NASA Goddard Space Flight Center} \label{fig:cmbCobe}
+\includegraphics[width=0.6\textwidth]{cobe_cmb.png}
+\end{SCfigure}
 
-    def plots(self,numPlots = 1):
-        '''
-        Plots triaining loss and learning rate of each student in the same figure, two graphs
-        '''
-        outputName = '{path}{date:%Y-%m-%d_%H%M%S}.png'.format(path = GRAPH_OUTPUT_PATH, date=datetime.datetime.now())
-        averageLR = ['{0:.3g}'.format(np.mean(self.trainingLoss[i])) for i in range(self.numStudents)]
-        steadyStateMSE = ['{0:.3g}'.format(self.trainingLoss[i][-1]) for i in range(self.numStudents)]
-        if numPlots == 2:
-            fig, ax = plt.subplots(numPlots,sharex=True)
-            for i in range(self.numStudents):
-                ax[0].plot(self.trainingLoss[i], label = '{0} synapses'.format(self.sizeNNs[i]))
-                ax[1].plot(self.learningRates[i], label = '{0} synapses'.format(self.sizeNNs[i]))
-                ax[0].legend()
-                ax[1].legend()
-                ax[0].set_ylabel('MSE')
-                ax[1].set_ylabel('Learning rate')
-                ax[1].set_xlabel('Number of epochs (every {0})'.format(self.binSize))
-                fig.suptitle(self.title)
-        elif numPlots ==1 :
-            fig, ax = plt.subplots()
-            for i in range(self.numStudents):
-                ax.plot(self.trainingLoss[i], label = '{0} synapses'.format(self.sizeNNs[i]))
-                ax.legend()
-                ax.set_ylabel('MSE')
-                ax.set_xlabel('Number of epochs (every {0})'.format(self.binSize))
-                #ax.set_title(self.title+'\n steady state MSE {0:1.3g},\n average learning rate {1:1.3g}'.format(np.array(steadyStateMSE),np.array(averageLR)))
-                ax.set_title(self.title+'\n steady state MSE {0},\n average learning rate {1}'.format(steadyStateMSE,averageLR))
-        plt.tight_layout()
-        fig.savefig(outputName)
-        plt.close()
-        print('intial MSE',[self.trainingLoss[i][0] for i in range(self.numStudents)])
-        #print(self.sizeStudents)
+\begin{SCfigure}[0.6][p]
+\caption{
+WMAP 1 year CMB anisotropy map, NASA Goddard Space Flight Center}\label{fig:cmbWmap}
+\includegraphics[width=0.6\textwidth]{WMAP_cmb.png}
+\end{SCfigure}
 
-    def plotsAll(self):
-        #print(self.trainingLoss)
-        outputName = '{path}{date:%Y-%m-%d_%H%M%S}.png'.format(path = GRAPH_OUTPUT_PATH, date=datetime.datetime.now())
-        fig, ax = plt.subplots(2,2,sharex=True)
-        for i in range(self.numStudents):
-            ax[0,0].plot(self.trainingLoss[i], label = '{0} synapses'.format(self.sizeNNs[i]))
-            ax[1,0].plot(self.learningRates[i], label = '{0} synapses'.format(self.sizeNNs[i]))
-            ax[0,1].plot(self.trainingLoss[0])
-            ax[1,1].plot(self.learningRates[0])
-            ax[0,0].legend()
-            ax[1,0].legend()
-            ax[0,0].set_ylabel('MSE')
-            ax[1,0].set_ylabel('Learning rate')
-            ax[1,0].set_xlabel('Number of epochs (every {0})'.format(self.binSize))
-        fig.suptitle(self.title)
-        fig.savefig(outputName)
-        plt.close()
-
-class NoisyStudentsTeacher(StudentsTeacher):
-    def __init__(self, sizeTeacher, sizeStudents = None, activationFunctions = None, learningRate = LEARNING_RATE, gamma1 = GAMMA_1, gamma2 = GAMMA_2, epochs = NUM_EPOCH,numExamples = NUM_EXAMPLES, delta_t = DELTA_T):
-        """
-        :param sizeTeacher: (tpl/list) Dimensions of teacher neural network. Number of units for each layer (input, hidden layers, output)
-        :param sizeStudents: (matrix) Dimensions of each student neural network. They should all have same number of units in input and output layer as teacher
-        :param activationFunctions: (tpl/list) Activation functions. The list has size 1, if we want to set all activation functions to that. Otherwise size len(numUnits)-1
-        :param learningRate: (float) learning rate for the optimizer (learnign algorithm)
-        :param epochs: (int) number of epochs for training
-
-        creates student and teacher NN, and initializes random data to train
-        """
-        self.gamma1 = gamma1
-        self.gamma2 = gamma2
-        self.delta_t = delta_t
-        StudentsTeacher.__init__(self, sizeTeacher, sizeStudents, activationFunctions, learningRate, epochs, numExamples)
-        self.title = 'MSE for NNs with learnign rate {0}, {1} epochs\nand noisy gradient with gamma2={2}, gamma3={3}, T={4} '.format(learningRate, epochs, gamma1, gamma2, delta_t)
-        #self.title = 'MSE for NNs with learnign rate {0}, {1} epochs\nand noisy gradient with gamma2={2}'.format(learningRate, epochs, gamma2)
-
-    def buildNN(self,size):
-        return NoisyFFNN(size,self.activationFunctions,\
-        self.lr,self.gamma1,self.gamma2,self.delta_t)
-
-def teacherSize(numLayers = NUM_LAYERS, numInput = NUM_INPUT, numOutput = NUM_OUTPUT):
-    size = np.random.randint(MIN_UNITS,MAX_UNITS,size = numLayers)
-    size[0] = numInput
-    size[-1] = numOutput
-    return size
-
-def studentSize(teacherSize, studentScaling = STUDENT_SCALING, scaleLayers = False):
-    # creates the arrays of sizes for students from size  of teacher network scaled
-    # number of layers for each student is multiplied by scaling
-    if scaleLayers:
-        layers = [int(x*len(teacherSize)) for x in studentScaling]
-    else:
-        layers = [int(1*len(teacherSize)) for x in studentScaling]
-    sizes = []
-    # for each student
-    for i in range(len(layers)):
-        # if the scaling is one return the same size as teacher
-        if studentScaling[i] == 1:
-            sizes.append(teacherSize)
-        else:
-            # scale max number of units added to each layer
-            maxU = int(MAX_UNITS*studentScaling[i])
-            # add random number of units to the layers in teacher
-            newSize = teacherSize+np.random.randint(MIN_UNITS,maxU, size=len(teacherSize))
-            # add layers with random number of units to the expanded layers of teacher
-            sizes.append(np.concatenate((newSize,np.random.randint(MIN_UNITS,maxU,size=layers[i]-len(teacherSize)))))
-            # change number inputs and outputs to same as teacher
-            sizes[i][0] = teacherSize[0]
-            sizes[i][-1] = teacherSize[-1]
-    return sizes
+\begin{SCfigure}[0.6][p]
+\caption{
+CMB anisotropies as measured by Planck, ESA} \label{fig:cmbPlanck}
+\includegraphics[width=0.6\textwidth]{Planck_CMB.jpg}
+\end{SCfigure}
 
 
-if __name__ == '__main__':
-    tf.reset_default_graph()
-    #teacher = teacherSize()
-    #print(teacher)
-    #students = studentSize(teacher)
-    #print(students)
-    teacher = [10, 7,  10]
-    students = [np.array([10, 7, 10]), np.array([ 10, 40, 10]), \
-    np.array([ 10, 400, 10])]
-    #teacher = [1, 2, 1]
-    #students = [np.array([1, 2, 1]), np.array([ 1,4,1]), np.array([ 1,8,1])]
-    #model = NoisyStudentsTeacher(teacher,students)
-    model = StudentsTeacher(teacher,students)
-    model.run()
-    model.plots(1)
+In this lab you won't be able to detect such anisotropies, but hopefully you will get a good estimate of the constant temperature of the CMB. 
+
+
+%----------------------------------------------------------------------------------------
+%	Experimental Setup
+%----------------------------------------------------------------------------------------
+
+
+\section{Experimental Setup}
+
+\subsection{Radio Telescope} \label{setup}
+
+\begin{figure}[h]
+    \centering
+    \begin{subfigure}[b]{0.3\textwidth}
+        \includegraphics[width=\textwidth]{Horn.jpg}
+        \caption{}\label{fig:teles}
+    \end{subfigure}
+    ~
+    \begin{subfigure}[b]{0.3\textwidth}
+        \includegraphics[width=\textwidth]{Horn_tilted.jpg}
+        \caption{}\label{fig:teleSide}
+    \end{subfigure}    
+    ~
+    \begin{subfigure}[b]{0.3\textwidth}
+        \includegraphics[width=\textwidth]{Horn_back.jpg}
+        \caption{}\label{fig:teleBack}
+    \end{subfigure}   
+    \caption{Radio telescope used detect the CMB. The metal horn is encased in a wooden structure (\ref{fig:teles}) that rotates around an axis to set the direction of measurement (\ref{fig:teleSide}). At the end of the horn, the receiver detects the radiation and transforms the signal into a electric signal (\ref{fig:teleBack}).}
+    \label{fig:telescope}
+\end{figure}
+
+Figure \ref{fig:telescope} shows the radio telescope we use to detect the CMB.The radio telescope has two main parts: the horn and the radiometer. A metal horn of about 15cm of diameter captures the radiation and redirects it to the radiometer found at the end of the horn. The radiometer converts the radiation around a frequency of 19GHz into an electric signal. This signal is then coupled to the power supply and goes through an attenuator to finally reach the power sensor. The voltmeter measures the power of the signal across the power sensor, then the digital voltmeter digitalizes it to be read by the computer. 
+
+The horn has two main functions: selecting and redirecting the radiation coming straight form the sky and blocking other radiations form reaching the receiver. Since the solid angle of the horn is quite small, it will only survey a small part of the sky. Radiation that does not come in perfectly parallel to the cone will be reflected by the aluminium casing and after a few reflections this radiation will be dampened; it will not affect the measurement. 
+
+Metal coating around the radiometer prevents stray radiation from entering the horn and affecting the measurement. It is still advised to stay away from the horn opening at least half a meter since body heat or cell phone radiation might affect the measurement considerably. 
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.8\textwidth]{instruments.jpg}
+    \caption{Instruments connected to the radiometer and computer to get power measurements: On the left the analog voltmeter, on the right the digital voltmeter and power supply.}\label{fig:instruments}
+\end{figure}
+
+The radiometer is a converted satellite receiver that outputs a voltage that is measured by the power sensor. The voltagemeter measures the voltage across the power sensor, which is directly related to the power measured by the radiometer. The actual voltage measurement is done by an analog voltmeter with 4 significant figures, too little for very precise measurement. In order to increase precision and to prevent note taking by hand, the analog voltmeter is connected to a digital voltmeter which can be directly connected to a laptop via USB. Figure \ref{fig:instruments} shows the power meter and voltmeters.
+
+\subsection{Calibration Equipment} \label{calEquip}
+
+\begin{figure}[h]
+    \centering
+    \begin{subfigure}[b]{0.4\textwidth}
+        \includegraphics[height=0.3\textheight]{eccosorb_front.jpg}
+        \caption{}\label{fig:eccoFront}
+    \end{subfigure}
+    ~
+    \begin{subfigure}[b]{0.4\textwidth}
+        \centering
+        \includegraphics[height=0.3\textheight]{eccosorb_back.jpg}
+        \caption{}\label{fig:eccoBack}
+    \end{subfigure}    
+    \caption{ Calibrator used: the Eccosorb (\ref{fig:eccoFront}), absorbs the incoming radiation and the aluminum in the back (\ref{fig:eccoBack}) blocks radiation from going through the Eccosorb. The calibrator is held by a wodden handle.}
+    \label{fig:ecco}
+\end{figure}
+
+As explained in section \ref{calibration} in order to have reliable measurements, the radiometer needs to be calibrated. 
+We need to measure the power output corresponding to radiation from a black body at known temperature. In our case this is a combination of Eccosorb (a microwave absorber) and aluminium, which is then cooled down. Figure \ref{fig:ecco} shows one such calibrator. The pyramidal shape of the Eccosorb forces the incoming radiation to reflect muliple times, damping the signal until it is negligible. Hence the Eccosorb absorbs incoming radiation and only emits its own thermal radiation. On the back of the Eccosorb an aluminium plate is glued to prevent radiation from going straight through the Eccosorb. This calibrator is held with a wooden stick to minimize thermal contact between the hand and the calibrator. 
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[height=0.5\textheight]{calibrator.png}
+    \caption{Calibrator placed on the horn opening to block external radiation and serve as a known temperature black body radiation source}\label{fig:calibration}
+\end{figure}
+
+A temperature sensor is placed on the surface of the Eccosorb to measure its temperature as accurately as possible. When the calibrator is cooled down, either by placing it in a dry ice container, or by submerging it in liquid nitrogen, it will emit black body radiation at a temperature. When put on top of the horn, the apparatus will only measure this radiation of the calibrator as shown in Figure \ref{fig:calibration}.
+
+\subsection{Physical Setup}
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.8\textwidth]{location.jpg}
+    \caption{Instruments on the Pupin roof facing North-West for a clear view}\label{fig:location}
+\end{figure}
+
+Since glass is thermally insulating and buildings tend to produce a lot of stray radiation, the best place to make measurements of the CMB is on the roof. It guarantees an unimpeded view of the sky and minimizes interference from other buildings. You will have to carry up the equipment, since the last set of stairs does not have an elevator to go with it. 
+A clear view on the roof is facing North-West, over the Hudson onto New Jersey  (see Figure \ref{fig:location}). Starting at about 25 degrees, sky sweeps upward should be relatively free of any interference, minding clouds and planes of course. 
+
+
+%----------------------------------------------------------------------------------------
+%	Methods
+%----------------------------------------------------------------------------------------
+\section{Methods}
+
+\subsection{Black Body Radiation and Brightness Temperature}
+The spectrum of the CMB radiation has two important characteristics; it is highly isotropic (up to one part in $10^3$) and it corresponds closely to the radiation of a black body. Planck's law gives a formula for the radiance of a black body as a function of its temperature and frequency. The low temperature approximation reduces to the Rayleigh-Jeans expression:
+
+\begin{equation}
+	B(\lambda, T) = \frac{2ck_B}{\lambda^4}T
+	\label{eq:planck}
+\end{equation}
+ where $\lambda$ is the wavelength, $c$ is the speed of light in vacuum, $k_B$ is Boltzmann constant and $T$ is the temperature. Thus, for a fixed wavelength, the power of the radiation is proportional to the temperature of the source. Because of this relationship between radiation intensity and temperature, we can convert any measured power into a brightness temperature at the measured wavelength. 
+
+\begin{equation}
+	T_b = \frac{\lambda^2}{2k_b}I \label{eq:TbI}
+\end{equation}
+
+where $\lambda$ is the wavelength, $T_b$ is the brightness temperature, and $k_B$ is Boltzmann constant and $I$ is the radiation intensity. In general, the brightness temperature of a radiation depends on the wavelength. However, for black bodies the $T_b$ is independent of wavelength \cite{_cosmic_????}. In fact, the brightness temperature $T_b$ of the radiation coming from a black body is just the temperature of the source.
+
+\begin{equation}
+	T_b = T
+	\label{eq:temp}
+\end{equation} 
+ 
+ 
+\subsection{Observation Strategy} \label{strategy}
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.8\textwidth]{CMB-Tb.jpg}
+    \caption{Measured brightness temperature $T_B$ of the CMB at different wavelengths. $T_{B} = 2.725$K is consistent with all the data within error bars \cite{_cosmic_????}.}\label{fig:cmbTb}
+\end{figure}
+
+The main goal of this lab is to measure the temperature $T_{CMB}$ of the cosmic microwave background (CMB). From Equation \ref*{eq:temp} we know that it is enough to find the brightness temperature of the CMB. Figure \ref{fig:cmbTb} shows a graph of CMB brightness temperature at different wavelengths that were measured by different experiments. The measurements are consistent with the brightness temperature at a black body at 2.725K.
+ 
+Since the black body brightness temperature is independent of wavelength, in theory, we could measure it for any radio frequency. Because the CMB is not the only source of radiation measured from earth, some frequencies are preferable for measurements form the ground. At small frequencies $\sim$100MHz, the synchrotron radiation from (the center of) the galaxy is large. At higher frequencies $\sim$22GHz, the Earth's atmospheric emission dominates \cite{condon_introduction_2016}. Hence, in order to maximize the proportion of measured radiation coming from the CMB, we choose a frequency in the middle of this window: 19GHz.
+
+As discussed in Section \ref{setup} we measure the power of the 19GHz radiation that reaches the receiver. Then we can find the corresponding brightness temperature. Although these two quantities are proportional according to Equation (\ref{eq:TbI}), we must do a calibration measurement to find the exact proportionality coefficients specific to the instruments used. 
+
+Furthermore, the brightness temperature value we obtain is a combination of multiple sources of radiation. Thus, to obtain the brightness temperature corresponding solely to the CMB radiation we must identify the other sources of radiation and subtract their contribution to the total brightness temperature. It turns out that the main source of background is the Earth's atmosphere. With the ``sky dip'' technique one can determine the radiation from the atmosphere. 
+
+Hence there are two main steps to obtain a value for the CMB temperature: 
+
+\begin{enumerate}
+	\item Calibrate the response of the system to the brightness temperature
+	\item ``Sky dip" test
+\end{enumerate}
+
+\subsubsection{Calibration} \label{calibration}
+The calibration is the most delicate part of the measurement. It is essential to find the most accurate relation between the power output and the brightness temperature. According to Equation (\ref{eq:planck}) we expect the measured power $P_{obs}$ to increase linearly with respect to brightness temperature of the source $T_{obs}$ the rate of increase is called the gain $G$:
+
+\begin{equation}
+    P_{obs} = GT_{measured}
+\end{equation}
+
+Furthermore, the receiver electronics have some intrinsic noise that produce a residual output power $P_{rec}$ with corresponding temperature $T_{rec}$. 
+
+\begin{equation}
+    P_{obs} = GT_{source} + P_{rec} = G(T_{obs} + T_{rec})
+    \label{eq:PT}
+\end{equation}
+
+To find the values of $G$ and $T_{rec}$, we perform power measurements for black bodies at known temperatures with the calibrator described in section \ref{calEquip}. Calibrations should be done multiple times, at least once at the beginning and once at the end to detect any drifts. Each calibration consists of two or three power-temperature measurements: one with the calibrator at room temperature, one at dry ice temperature and, depending on the availability, one at liquid nitrogen temperature. Using these $P$ and $T$ values and equation (\ref{eq:PT}) we find the best values for $G$ and $T_{rec}$ and can convert power measurements into temperature measurements:
+
+\begin{equation}
+    T_{obs} = \frac{P_{obs}}{G} - T_{rec}
+\end{equation}
+
+Note that the temperature at which the calibrator is radiating does not need to be the same temperature as the liquid nitrogen or dry ice. You will need to make very careful temperature measurements of the surface of the calibrator after it has been cooled down. Do not cool the metal temperature sensor down to nitrogen/dry ice temperature - it heats up less quickly than the calibrator itself. Furthermore you will need to look up the emission spectrum of the Eccosorb (it can be found on the Internet) to determine if the calibrator radiates as a black body, and if not what the shift in power radiated is. With this estimate you can add a temperature shift to the assumed calibrator emission temperature. That means you assume the calibrator radiates as a black body at a temperature $T_{N_2} + \Delta T$ instead of just $T_{N_2}$. This will allow you to arrive at a right estimate for the CMB temperature.
+
+\subsubsection{``Sky Dip" Test}
+Once we have the relation between the power measurement and the brightness temperature, we must find the brightness temperature of the CMB radiation reaching the earth. As explained in section \ref{strategy}, to do this we must find the brightness temperature from the atmosphere's thermal radiation and subtract it to the total value. The remaining radiation is the radiation that we would measure if there were no atmosphere: this corresponds to the CMB. 
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.8\textwidth]{airMasses.png}
+    \caption{Schematic showing the amount of air mass traveled through by the radiation to reach the receiver for different $\theta$ angles. Note that $\theta = 90-z$. Modified from \cite{nehrkorn_measurement_2011}}\label{fig:airMasses}
+\end{figure}
+
+We assume a linear attenuation of the signal through the atmosphere. Hence, we expect the temperature to increase proportionally to the amount of ``air mass", the amount of atmosphere the signal travels to reach the earth. Yet, from simple trigonometry (see Figure \ref{fig:airMasses}), we know that the number of air masses decreases by a factor of $\frac{1}{\cos(90-\theta)} = \frac{1}{\sin(\theta)} = \mathrm{cosec}(\theta)$ where $\theta$ is the angle from the horizontal to the angle the direction at which the horn is pointing. Thus, the temperature also decreases by the same factor as $\theta$ increases:
+
+\begin{equation}
+    T_{obs} = T_{CMB} + \frac{T_{vertical}}{\sin(\theta)}
+    \label{eq:skydip}
+\end{equation}
+
+,where $T_{vertical}$ is the temperature measured when $\theta = 90$, the horn is pointing upwards.
+
+The ``sky dip" technique is based on this fact. We measure multiple temperatures for different angles $\theta$ and find the best fit to equation (\ref{eq:skydip}). You should take  measurements for angles between $90º$ and $25º$. If you reduce the angle too much, you might get interferences from surrounding buildings. Take at least one minute measurements for each angle and use the average power to reduce random fluctuations in the power measurements.
+
+\subsection{Data Taking}
+
+\subsubsection{Power Measurements}
+The digital voltmeter is connected to the laptop with a USB cable. 
+In the laptop directory \\
+\verb|/Users/cosmology/Google Drive/Projects/radiometer| you can find a python class in \verb|Readout.py| to communicate with the voltmeter. In the same directory, you there is also a python program called \verb|BasicReadout.py|; this is the program that you will use to take measurements. It creates an instance of the Readout class to read form the multimeter. To take data open the BasicReadout file in an editor, it is recommended to do it with PyCharm IDE. First, specify the values of the presets (duration, path and extension, angles, calibrator boolean, temperatures and weather, units). These strings will be written in the header of the file containing the measurements. They provide information about the measurement that are important for the analysis later. Save the python file and run the program \verb|BasicReadout.py|. This will create a .txt file in the path you indicated with a name of the form "2016-11-10\_10:20:50\_Readout.txt". 
+
+The value read by the computer from the voltmeter is just a number with no units. Yet the analog and digital voltmeters changes units automatically. Hence, the values from measurements with very different signals, for example from the calibration and the sky dip, might be in different units. Therefore, it is very important to keep track of the units for each set of measurements. On the right of the analog voltmeter display there is a light next to the unit of the measurement (see Figure \ref{fig:instruments}). Before each measurement check the unit and set the ``units" variable in BaicReadout.py file to this value. Later in the data analysis you will have to convert all the power measurements to the same unit. 
+
+
+\subsubsection{Temperature Measurements}
+As explained in section \ref{calibration} to have an accurate value of the temperature we need a good calibration and hence precise temperature values. The main source of error in the temperature measurement is the placement of the thermometer and hence the measured temperature of the calibrator. It should reflect accurately the temperature of the calibrator, mainly the eccosorb that is emitting the black body radiation to the receiver. Section \ref{calCheck} describes a good technique.
+
+Ideally, the temperature sensors will be connected to the computer to get the exact temperatures during the calibration measurements. If this is not possible, you can record a video of the temperature and later extract the values during the analysis. In any case, you should at least write an approximate ambient temperature and calibrator temperature in the header of the power measurement file. The ambient temperature is important, as the performance of the apparatus, especially the amplifiers, varies with temperature. Remember to do two calibration measurements. One before the sky dip test and one after. This helps you detect any systematic amplitude drifts that might occur during the session.
+
+
+%----------------------------------------------------------------------------------------
+%	Data Analysis
+%----------------------------------------------------------------------------------------
+
+\section{Data Analysis} 
+
+Plot power versus time after each measurement  to detect any anomalies and repeat the measurements if so. The anomalies could be caused by movement of the cables while recording, a faulty connection, something blocking the horn or a bug in the program refer to Section \ref{troubleshooting} for more information. It is also recommended to find the calibration coefficients on the spot to check that they give sensible temperature values. The directory \\
+\verb|/Users/cosmology/Google Drive/Projects/radiometer/notebooks| contains some jupyter notebooks to do data analysis. Figure \ref{fig:cal} shows the calibration measurements we obtained. For the ambient temperature power values we averaged all the measurements to reduce the random errors. However, when the calibrator is at dry ice temperature or liquid nitrogen, the temperature increases rapidly during the one minute measurement. Hence we couldn't average all the power values - instead we used the first power measurement with its corresponding temperature. A later analysis should be done to find the best fit to the sky dip measurements according to the Equation (\ref{eq:skydip}). Figure \ref{fig:plotAirMass} shows the results from the sky dip test. We get a value of $T_{CMB} = 2.5 \pm0.8$K.
+
+
+% CMB figures:
+
+\begin{figure}[p]
+    \centering
+    \includegraphics[width=0.8\textwidth]{power_DryIce+Hot_Fit.png}
+    \caption{Plot of measured power with calibrator at liquid nitrogen, dry ice temperature and ambient temperature and the best fit. The error bars are very small.}\label{fig:cal}
+\end{figure}
+
+\begin{figure}[p]
+    \centering
+    \includegraphics[width=0.8\textwidth]{temp+fit_airMass.png}
+    \caption{Plot of measured power with respect to air masses (in red). The blue line is the best fit and the green lines the high and low fits using one standard deviation.}\label{fig:plotAirMass}
+\end{figure}
+
+
+
+%----------------------------------------------------------------------------------------
+%	Checklist
+%----------------------------------------------------------------------------------------
+
+ 
+
+{\newpage}
+\section{Checklists}
+\subsection{Inventory}
+\begin{checklist}
+  \item CMB radio telescope (Includes horn, radiometer and power sensor)
+  \item Antenna rotating stand
+  \item MacBook Pro Laptop
+  \item Analog Voltmeter (Newlett Packard 436A Power Meter) and cable
+  \item Digital Voltmeter (Agilent 34405A), cable and USB connector
+  \item Power Supply (Agilent E3620A) on 12-13V and cable
+  \item Extension cord
+  \item Mobile cart for instruments
+  \item 2 Eccosorb/Aluminium Calibrator
+  \item 2 Temperature sensors
+  \item Digital thermometer
+  \item Cryogloves
+  \item Dry Ice container
+  \item Liquid nitrogen container
+  \item Dry Ice
+  \item Liquid nitrogen
+\end{checklist}
+
+\subsection{Setup}
+\begin{checklist}
+    \item Connect instruments and laptop to power supply
+    \item Connect power sensor to analog voltmeter
+    \item Connect analog voltmeter to digital voltmeter
+    \item Connect radiometer to power supply
+    \item Switch on the power supply
+    \item Switch on the voltmeters
+    \item Open \verb|/Users/cosmology/Google Drive/Projects/radiometer/BasicReadout.py| in PyCharm IDE
+    \item Set the variables: \verb|path|, \verb|extension|, \verb|temperatureOutside|, \verb|weather| and \verb|units| in the python file
+    \item Check measurements by placing ambient temperature Eccosorb on top of antenna and reading ca. 0.13-0.14$\mu W$ on the voltmeters
+ %   \item Do calibrations first, then measurements
+ %   \item Always visualize data right after taking it to spot discrepancies
+  
+\end{checklist}
+
+\subsection{Calibration} \label{calCheck}
+Do the calibration twice, once before sky dip and once after.Do at least two measurements: the first one with the ambient temperature calibrator and the second one with the dry ice or liquid nitrogen temperature calibrator.
+\begin{checklist}
+  \item Place one Eccosorb calibrator in dry ice or liquid nitrogen and allow to cool
+  \item Rotate antenna to 20 degrees above horizontal to prevent coolant from entering the antenna
+   \item Place ambient temperature calibrator on the antenna. Make sure there are no gaps (use gloves if cold) between the Eccosorb and the horn
+   \item Check the units on the voltmeter display and set the value of the variable \verb units in BasicReadout.py
+  \item Set \verb|calibrator_boolean| to 1 and specify approximate \verb|temperatureCalibrator|
+  \item Connect temperature sensor to calibrator by fixing it to the outside of the Eccosorb with duck-tape
+  \item Start python program
+  \item After $\sim$20 min, when the cold calibrator has completely cooled down, prepare thermometer for cold measurement
+  \item Cool thermometer briefly down to about 20-30K above calibrator temperature
+  \item Connect temperature sensor to calibrator by fixing it to the outside of the Eccosorb with duck-tape
+  \item Set the value of \verb|temperatureCalibrator|  in BasicReadout.py
+  \item Place Eccosorb on the antenna making sure there are no gaps (use gloves if cold)
+  \item Start python program immediately
+\end{checklist}
+
+\subsection{Measurement - one sky sweep}
+\begin{checklist}
+  \item Rotate antenna so horn is pointing upward
+  \item Check that the horn is at 90º from the horizontal, iether with the marks on the rotation axis (see Figure \ref{fig:teleSide}) or with a level app on your phone
+  \item Check the units on the voltmeter display and set the value of the variable \verb|units| in BasicReadout.py
+  \item Set angle and duration values in BasicReadout.py
+  \item Start program to take measurements
+  \item Change antenna angle, to 85º and repeat measurements
+  \item Repeat until 20º
+\end{checklist}
+
+{\newpage}
+\section{Troubleshooting} \label{troubleshooting}
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.8\textwidth]{noiseFromMovingCable.png}
+    \caption{Plot of measured power with respect to time. The fluctuations between 170-250s are due to the movement of the connection cables}\label{fig:noise}
+\end{figure}
+
+\begin{enumerate}
+    \item Random fluctuations in power measurement (large peaks):
+        \begin{itemize}
+        \item Tape down any cables, movement due to wind distorts measurement. Figure \ref{fig:noise}
+        \item Point antenna further upward
+        \item Take data for longer than 1min
+        \item Turn power supply off and on again
+        \end{itemize}
+    \item Time drift in data
+        \begin{itemize}
+        \item Turn power supply off and on again
+        \item Calibrate often to be able to predict temperature correctly
+        \end{itemize}
+    \item Python program does not connect with Voltmeter
+        \begin{itemize}
+        \item Check USB connection
+        \item Check whether you have the latest PyVisa version \url{https://pypi.python.org/pypi/PyVISA}
+        \item Re-pull the python program from git if you have changed any variables
+        \end{itemize}
+    \item Analysis yields wrong CMB temperature (by a lot)
+        \begin{itemize}
+        \item Quality-check your sky dip measurements:
+        \begin{itemize}
+        \item Make sure there are no large scale time drifts
+        \item Calculate the temperature of the sky according to the measurements - is it reasonable?
+        \end{itemize}
+        \item Make sure you measured the calibrator temperature correctly, it should be above $T_{N_2}$ or $T_{dry ice}$
+        \item Adjust your uncertainty in angle measurements (it should be at or above 1 degree)
+        \end{itemize}
+
+\end{enumerate}
+
+
+\section{Possible Improvements}
+There are some improvements to be made to this experiment, as it is quite new (we had the first run in Fall 2016). Here is a list of improvements, at least some of which you should try to implement. 
+\begin{itemize}
+    \item Connect the temperature sensor to computer to automatize temperature measurements.
+    \item Synchronize temperature and power measurements for calibration.
+    \item Try different absorbers other than Eccosorb. Try to improve or modify the emission spectrum of Eccosorb.
+    \item Find the exact relation (not just a constant temperature addition) between temperature of the calibrator we measure of the thermometer and temperature of the radiation emitted. It would be useful to quantify this difference to get a better calibration. 
+    \item Make measurements at different detection frequencies other than 19GHz and compare the results. 
+    \item Make a cone of Eccosorb for calibrations and improve the location of the thermometer.
+    \item Check the temperature dependence of the apparatus (in particular amplifiers). Determine the difference in measurements in a cold and warm room. 
+\end{itemize}
+
+
+
+\pagebreak
+
+%----------------------------------------------------------------------------------------
+%	BIBLIOGRAPHY
+%----------------------------------------------------------------------------------------
+\nocite{*}
+
+\bibliographystyle{unsrtnat}
+
+\bibliography{CMBLab}
+
+%----------------------------------------------------------------------------------------
+\end{document}
+
+
+
+\begin{figure}
+    \begin{center}
+    \begin{subfigure}[p]{0.5\textwidth}
+        \includegraphics[width=\textwidth]{COBE_penzias_wilson_cmb.jpg}
+        \caption{Constant CMB temperature accross the sky as was measured by Penzias and Wilson (and what you will measure), Cardiff University}
+        \label{fig:cmbPenzias}
+    \end{subfigure}
+    \newline
+    %add desired spacing between images, e. g. ~, \quad, \qquad, \hfill etc. 
+      %(or a blank line to force the subfigure onto a new line)
+    \begin{subfigure}[p]{0.5\textwidth}
+        \includegraphics[width=\textwidth]{cobe_cmb.png}
+        \caption{CMB anisotopies accross the sky as measured by COBE,NASA Goddard Space Flight Center}
+        \label{fig:cmbCobe}
+    \end{subfigure}
+    \newline
+    %add desired spacing between images, e. g. ~, \quad, \qquad, \hfill etc. 
+    %(or a blank line to force the subfigure onto a new line)
+    \begin{subfigure}[p]{0.5\textwidth}
+        \includegraphics[width=\textwidth]{WMAP_cmb.png}
+        \caption{WMAP 1 year CMB anisotropy map, NASA Goddard Space Flight Center}
+        \label{fig:cmbWmap}
+    \end{subfigure}
+    \newline
+    \begin{subfigure}[p]{0.5\textwidth}
+        \includegraphics[width=\textwidth]{Planck_CMB.jpg}
+        \caption{CMB anisotropies as measured by Planck, ESA}
+        \label{fig:cmbPlanck}
+    \end{subfigure}
+    \end{center}
+    \caption{CMB measurements}\label{fig:CMB}
+\end{figure}
+
