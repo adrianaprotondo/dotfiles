@@ -10,7 +10,11 @@
     telemetryConsent: "limited"
     themes: [
       "unity-ui"
+<<<<<<< HEAD
       "one-dark-syntax"
+=======
+      "atom-dark-syntax"
+>>>>>>> 0e66c9bbbc2e0e7d270030afc26aea72f7241714
     ]
   editor: {}
   "exception-reporting":
