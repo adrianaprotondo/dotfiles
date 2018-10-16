@@ -10,17 +10,23 @@
     telemetryConsent: "limited"
     themes: [
       "unity-ui"
-<<<<<<< HEAD
-      "one-dark-syntax"
-=======
-      "atom-dark-syntax"
->>>>>>> 0e66c9bbbc2e0e7d270030afc26aea72f7241714
+      "atom-light-syntax"
     ]
   editor: {}
   "exception-reporting":
     userId: "3b045aa3-aa6c-4f64-a80e-226c84ba0878"
   "highlight-selected":
     showResultsOnScrollBar: true
+  "linter-ui-default": {}
+  "markdown-preview-plus":
+    mathConfig:
+      enableLatexRenderingByDefault: true
+    previewConfig:
+      activatePreviewWithEditor: true
+    syncConfig:
+      syncEditorOnPreviewScroll: true
+      syncPreviewOnChange: true
+      syncPreviewOnEditorScroll: true
   "package-sync":
     createOnChange: true
     forceOverwrite: true
