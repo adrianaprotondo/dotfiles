@@ -2,6 +2,8 @@
   "atom-beautify":
     general:
       _analyticsUserId: "de157e1d-22e9-48d3-a486-73ae593458ad"
+  "autocomplete-python":
+    useKite: false
   core:
     disabledPackages: [
       "language-gfm"
@@ -17,6 +19,8 @@
     userId: "3b045aa3-aa6c-4f64-a80e-226c84ba0878"
   "highlight-selected":
     showResultsOnScrollBar: true
+  "linter-flake8":
+    executablePath: "~/Library/Python/3.7/bin/flake8"
   "linter-ui-default": {}
   "markdown-preview-plus":
     mathConfig:
