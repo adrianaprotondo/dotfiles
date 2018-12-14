@@ -128,8 +128,19 @@ map <leader>s? z=
 
 
 
-""""""""""""""
+""""""""""""""""""""""""""""""""""
+" Pathogen stuff
+"""""""""""""""""""""""""""""""""""
 execute pathogen#infect()
 
-"call pathogen#runtime_append_all_bundles()
-"call pathogen#helptags()
+filetype plugin indent on
+syntax on
+
+" call pathogen#runtime_append_all_bundles()
+" call pathogen#helptags()
+
+"""""""""""""""""""""""""""""""""""
+" Latex preview module
+""""""""""""""""""""""""""""""""""""
+
+let g:livepreview_previewer = 'open -a Preview'
