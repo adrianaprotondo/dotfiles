@@ -96,6 +96,8 @@ alias gccg='gcc -g -Wall'
 alias g++g='g++ -g -Wall'
 alias valgrindlc='valgrind --leak-check=yes'
 
+# added by Anaconda 1.6.1 installer
+export PATH=/Users/APR1/anaconda/bin:$PATH
 
 export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm

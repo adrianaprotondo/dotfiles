@@ -3,3 +3,6 @@
 /.atom/compile-cache/
 /.atom/packages/
 /.atom/storage/
+.atom/kite-config.json
+.atom/recovery/NeuralNetwork_minpy-c7bf73.py
+.atom/split-diff/*
