@@ -5,7 +5,4 @@
 /.atom/storage/
 .atom/kite-config.json
 .atom/recovery/NeuralNetwork_minpy-c7bf73.py
-.atom/split-diff/split-diff 1
-.atom/split-diff/split-diff 2
-.atom/split-diff/split-diff 1
-.atom/split-diff/split-diff 2
+.atom/split-diff/*
