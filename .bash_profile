@@ -1,6 +1,6 @@
 # add stuff to command line
-export PATH=${PATH}:/usr/local/mysql/bin
-
+# export PATH=${PATH}:/usr/local/mysql/bin
+export PATH=${PATH}:~/Library/Python/3.7/bin:/Library/Frameworks/Python.framework/Versions/3.7/bin
 
 # basic prompt
 # PS1='\u@\h \w \$ '
@@ -37,10 +37,10 @@ unset show_what_in_title_bar
 
 
 # use vim as a default command line editor
-export EDITOR="vim"
+# export EDITOR="vim"
 
 # set vi editing mode
-set -o vi
+# set -o vi
 
 # enable bash autocompletion
 [ -f /usr/local/etc/bash_completion ] && . /usr/local/etc/bash_completion
