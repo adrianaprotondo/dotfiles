@@ -1,6 +1,6 @@
 """""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 " Jae's Vim settings
-"
+""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 
 " Line numbers
 set number
@@ -139,9 +139,31 @@ syntax on
 " call pathogen#runtime_append_all_bundles()
 " call pathogen#helptags()
 
-"""""""""""""""""""""""""""""""""""
-" Latex preview module
-""""""""""""""""""""""""""""""""""""
 
-let g:livepreview_previewer = 'open -a Preview'
+
+"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+" => vim-airline
+"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+" let g:airline_powerline_fonts = 1
+"
+
+"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+" => vim-latex
+"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+    " REQUIRED. This makes vim invoke Latex-Suite when you open a tex file.
+    " REQUIRED. This makes vim invoke Latex-Suite when you open a tex file.
+    " REQUIRED. This makes vim invoke Latex-Suite when you open a tex file.
+    filetype plugin on
+
+    " IMPORTANT: win32 users will need to have 'shellslash' set so that latex
+    " can be called correctly.
+    set shellslash
+
+    " OPTIONAL: This enables automatic indentation as you type.
+    filetype indent on
+
+    " OPTIONAL: Starting with Vim 7, the filetype of empty .tex files defaults to
+    " 'plaintex' instead of 'tex', which results in vim-latex not being loaded.
+    " The following changes the default filetype back to 'tex':
+    let g:tex_flavor='latex'
 
