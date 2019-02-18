@@ -176,6 +176,7 @@ set showmatch
 " How many tenths of a second to blink when matching brackets
 set mat=2
 
+<<<<<<< HEAD
 " No annoying sound on errors
 set noerrorbells
 set novisualbell
@@ -227,6 +228,11 @@ set encoding=utf8
 set ffs=unix,dos,mac
 
 
+=======
+" Fold code according to indent
+set foldmethod=indent
+
+>>>>>>> a9890eb81a89766c565785124152fac9a5b63c6d
 """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 " => Text, tab and indent related
 """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
@@ -282,12 +288,24 @@ function! HasPaste()
     return ''
 endfunction
 
+<<<<<<< HEAD
 """""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 
 " Copy to clipboard with <F2> and paste from clipboard with <F3>
 map <F2> :.w !pbcopy<CR><CR>
 map <F3> :r !pbpaste<CR>
+=======
+""""""""""""""""""""""""""""""""""
+" Pathogen stuff
+"""""""""""""""""""""""""""""""""""
+execute pathogen#infect()
 
+filetype plugin indent on
+syntax on
+
+" call pathogen#runtime_append_all_bundles()
+" call pathogen#helptags()
+>>>>>>> a9890eb81a89766c565785124152fac9a5b63c6d
 
 
 """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
