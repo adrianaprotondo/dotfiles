@@ -191,6 +191,8 @@ endif
 " Add a bit extra margin to the left
 set foldcolumn=1
 
+" Fold code with indent
+set foldmethod=indent
 
 """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 " => Colors and Fonts
@@ -282,6 +284,9 @@ endfunction
 
 """""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 
+" Copy to clipboard with <F2> and paste from clipboard with <F3>
+map <F2> :.w !pbcopy<CR><CR>
+map <F3> :r !pbpaste<CR>
 
 
 
