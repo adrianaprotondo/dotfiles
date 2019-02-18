@@ -93,6 +93,9 @@ set showmatch
 " How many tenths of a second to blink when matching brackets
 set mat=2
 
+" Fold code according to indent
+set foldmethod=indent
+
 """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 " => Text, tab and indent related
 """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
@@ -127,7 +130,6 @@ map <leader>sa zg
 map <leader>s? z=
 
 
-
 """"""""""""""""""""""""""""""""""
 " Pathogen stuff
 """""""""""""""""""""""""""""""""""
@@ -138,7 +140,6 @@ syntax on
 
 " call pathogen#runtime_append_all_bundles()
 " call pathogen#helptags()
-
 
 
 """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
