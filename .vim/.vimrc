@@ -29,6 +29,11 @@ filetype indent on
 " The following changes the default filetype back to 'tex':
 let g:tex_flavor='latex'
 
+let g:vimtex_view_general_viewer = '/Applications/Skim.app/Contents/SharedSupport/displayline'
+let g:vimtex_view_general_options = '-r @line @pdf @tex'
+let g:vimtex_fold_enabled = 0 "So large files can open more easily
+
+
 """""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 " Jae's Vim settings
 """"""""""""""""""""""""""""""""""""""""""""""""""""""""""
@@ -265,6 +270,7 @@ set statusline=\ %{HasPaste()}%F%m%r%h\ %w\ \ CWD:\ %r%{getcwd()}%h\ \ \ Line:\ 
 " => Spell checking
 """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 " Pressing ,ss will toggle and untoggle spell checking
+set spell
 map <leader>ss :setlocal spell!<cr>
 
 " Shortcuts using <leader>
@@ -284,6 +290,10 @@ function! HasPaste()
     return ''
 endfunction
 
+" By pressing ctrl+r in visual mode, you will be prompted to enter 
+" text to replace with. Press enter and then confirm each change
+" you agree with y or decline with n.
+vnoremap <C-r> "hy:%s/<C-r>h//gc<left><left><left>
 """""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 
 " Copy to clipboard with <F2> and paste from clipboard with <F3>
@@ -328,3 +338,8 @@ syntax on
     let g:tex_flavor='latex'
     let g:vimtex_view_method='skim'
 
+"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+" => markdown-preview
+"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+"Plugin 'JamshedVesuna/vim-markdown-preview'
+let vim_markdown_preview_github=1
